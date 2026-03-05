@@ -20,7 +20,11 @@ export default function App() {
     try {
       setError(null)
       const res = await fetch(`/api/stats?days=${days}`)
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Error') }
+      if (!res.ok) {
+        let msg = `Error ${res.status}`
+        try { const e = await res.json(); msg = e.error || msg } catch { msg = await res.text().then(t => t.slice(0, 120)) || msg }
+        throw new Error(msg)
+      }
       setData(await res.json())
       setLastUpdated(new Date())
     } catch (e) {

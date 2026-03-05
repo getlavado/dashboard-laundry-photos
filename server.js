@@ -18,20 +18,30 @@ function cacheGet(key) {
 }
 function cacheSet(key, data) { cache.set(key, { data, ts: Date.now() }) }
 
-// ─── Firebase Init ───────────────────────────────────────────────────────────
-let rawKey = process.env.SERVER_FIREBASE_SERVICE_ACCOUNT_KEY || ''
-// Strip surrounding single-quotes if present (shell-style quoting)
-if (rawKey.startsWith("'") && rawKey.endsWith("'")) {
-  rawKey = rawKey.slice(1, -1)
+// ─── Firebase Init (lazy, with error capture) ────────────────────────────────
+let db = null
+let firebaseInitError = null
+
+try {
+  let rawKey = process.env.SERVER_FIREBASE_SERVICE_ACCOUNT_KEY || ''
+  // Strip surrounding single-quotes if present (shell-style quoting)
+  if (rawKey.startsWith("'") && rawKey.endsWith("'")) {
+    rawKey = rawKey.slice(1, -1)
+  }
+  if (!rawKey) throw new Error('SERVER_FIREBASE_SERVICE_ACCOUNT_KEY is not set')
+  const serviceAccount = JSON.parse(rawKey)
+
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: process.env.SERVER_FIREBASE_DATABASE_URL,
+    })
+  }
+  db = admin.firestore()
+} catch (err) {
+  firebaseInitError = err.message
+  console.error('[firebase-init]', err.message)
 }
-const serviceAccount = JSON.parse(rawKey)
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: process.env.SERVER_FIREBASE_DATABASE_URL,
-})
-
-const db = admin.firestore()
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const ORDERS_COLLECTION =
@@ -87,10 +97,28 @@ function detectGuiaField(sampleDoc) {
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 /**
+ * GET /api/health
+ * Quick diagnostics — confirms env vars are present (no values exposed).
+ */
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: !firebaseInitError,
+    firebaseError: firebaseInitError || null,
+    env: {
+      FIREBASE_KEY: !!process.env.SERVER_FIREBASE_SERVICE_ACCOUNT_KEY,
+      FIREBASE_URL: !!process.env.SERVER_FIREBASE_DATABASE_URL,
+      GUIA_FIELD:   process.env.GUIA_FIELD || '(not set)',
+    },
+    node: process.version,
+  })
+})
+
+/**
  * GET /api/explore
  * Returns 5 sample documents so you can inspect the real field names.
  */
 app.get('/api/explore', async (req, res) => {
+  if (!db) return res.status(500).json({ error: `Firebase not initialized: ${firebaseInitError}` })
   try {
     const snap = await db.collection(ORDERS_COLLECTION).limit(5).get()
     const docs = snap.docs.map(doc => {
@@ -129,6 +157,7 @@ app.get('/api/explore', async (req, res) => {
  * Main dashboard endpoint. Returns summary KPIs, daily trend and per-provider table.
  */
 app.get('/api/stats', async (req, res) => {
+  if (!db) return res.status(500).json({ error: `Firebase not initialized: ${firebaseInitError}` })
   try {
     const days = Math.min(parseInt(req.query.days) || 7, 90)
     const cacheKey = `stats_${days}`
