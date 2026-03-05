@@ -1,67 +1,117 @@
-import { CheckCircle2, AlertCircle, Clock, MinusCircle } from 'lucide-react'
+import { CheckCircle2, AlertCircle, Clock, MinusCircle, TrendingDown, TrendingUp } from 'lucide-react'
 
-const STATUS = {
-  'al-dia':     { label: 'Al día',      icon: CheckCircle2, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  'parcial':    { label: 'Parcial',     icon: Clock,        cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  'pendiente':  { label: 'Sin guías',   icon: AlertCircle,  cls: 'bg-[#f6653c]/10 text-[#d94e27] border-[#f6653c]/30' },
-  'sin-ordenes':{ label: 'Sin órdenes', icon: MinusCircle,  cls: 'bg-gray-50 text-gray-400 border-gray-200' },
-}
+/* ─── Helpers ────────────────────────────────────────────────────────────── */
 
-function ComplianceBar({ value }) {
+function ComplianceBar({ value, size = 'md' }) {
   const color =
     value >= 80 ? 'bg-emerald-500' :
     value >= 50 ? 'bg-amber-400' :
     value >  0  ? 'bg-[#f6653c]' : 'bg-gray-200'
+  const h = size === 'sm' ? 'h-1' : 'h-2'
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full bg-gray-100 min-w-[60px]">
-        <div className={`h-1.5 rounded-full transition-all ${color}`} style={{ width: `${value}%` }} />
-      </div>
-      <span className="text-xs text-gray-500 font-semibold w-9 text-right shrink-0">{value}%</span>
+    <div className={`flex-1 ${h} rounded-full bg-gray-100 overflow-hidden`}>
+      <div className={`${h} rounded-full transition-all duration-700 ${color}`} style={{ width: `${value}%` }} />
     </div>
   )
 }
 
-// Mobile card view for each provider
-function ProviderCard({ p }) {
-  const st = STATUS[p.status] ?? STATUS['sin-ordenes']
-  const Icon = st.icon
+/* ─── Failing Provider Card (large, alarming) ────────────────────────────── */
+
+function FailingCard({ p }) {
+  const isPending = p.status === 'pendiente'
+  const pending   = p.totalOrders - p.totalWithGuia
+  const accentBg  = isPending ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'
+  const numColor  = isPending ? 'text-red-600' : 'text-amber-600'
+  const dotColor  = isPending ? 'bg-red-500' : 'bg-amber-400'
+  const badgeBg   = isPending ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+  const barPct    = p.weeklyCompliance
+
   return (
-    <div className="p-4 border-b border-gray-50 last:border-0">
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <div>
-          <p className="font-bold text-gray-800 text-sm">{p.name}</p>
-          <p className="text-[10px] text-gray-300 font-mono mt-0.5 truncate max-w-[180px]">{p.id}</p>
-        </div>
-        <span className={`status-badge border ${st.cls} shrink-0`}>
-          <Icon size={10} />
-          {st.label}
+    <div className={`relative rounded-2xl border-2 ${accentBg} p-4 sm:p-5 flex flex-col gap-3 overflow-hidden`}>
+      {/* Pulsing dot indicator */}
+      <span className={`absolute top-4 right-4 flex h-2.5 w-2.5`}>
+        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${dotColor} opacity-60`} />
+        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${dotColor}`} />
+      </span>
+
+      {/* Header: name + badge */}
+      <div className="pr-6">
+        <p className="font-black text-gray-900 text-sm leading-tight">{p.name}</p>
+        <span className={`inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${badgeBg}`}>
+          {isPending ? <AlertCircle size={9} /> : <Clock size={9} />}
+          {isPending ? 'Sin guías' : 'Parcial'}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <div>
-          <p className="text-gray-400 font-medium mb-0.5">Guías pendientes</p>
-          <p className="font-bold">
-            {(() => {
-              const pending = p.totalOrders - p.totalWithGuia
-              return pending > 0
-                ? <span className="text-[#d94e27]">{pending}</span>
-                : <span className="text-emerald-600">0</span>
-            })()}
-          </p>
-        </div>
-        <div>
-          <p className="text-gray-400 font-medium mb-0.5">Total órdenes</p>
-          <p className="font-bold text-gray-700">{p.totalOrders}</p>
-        </div>
+
+      {/* Big pending number */}
+      <div>
+        <p className={`text-4xl font-black leading-none ${numColor}`}>{pending}</p>
+        <p className="text-[10px] font-bold text-gray-400 mt-0.5 uppercase tracking-wide">
+          {pending === 1 ? 'guía pendiente' : 'guías pendientes'}
+        </p>
       </div>
-      <div className="mt-3">
-        <p className="text-[10px] text-gray-400 font-medium mb-1">Cumplimiento semanal</p>
-        <ComplianceBar value={p.weeklyCompliance} />
+
+      {/* Compliance bar + % */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Cumplimiento del mes</span>
+          <span className={`text-xs font-black ${numColor}`}>{barPct}%</span>
+        </div>
+        <ComplianceBar value={barPct} size="md" />
+      </div>
+
+      {/* Footer stats */}
+      <div className="flex items-center gap-3 pt-1 border-t border-black/5 text-[10px] font-semibold text-gray-500">
+        <span>{p.totalWithGuia}/{p.totalOrders} del mes</span>
+        {p.todayOrders > 0 && (
+          <span className="text-gray-400">·</span>
+        )}
+        {p.todayOrders > 0 && (
+          <span>{p.todayWithGuia}/{p.todayOrders} hoy</span>
+        )}
       </div>
     </div>
   )
 }
+
+/* ─── Good Provider Row (compact, subdued) ───────────────────────────────── */
+
+function GoodRow({ p }) {
+  const noOrders = p.status === 'sin-ordenes'
+  return (
+    <div className="flex items-center gap-3 py-2.5 px-1 group hover:bg-gray-50 rounded-xl transition-colors">
+      {/* Status icon */}
+      <div className="shrink-0">
+        {noOrders
+          ? <MinusCircle size={14} className="text-gray-300" />
+          : <CheckCircle2 size={14} className="text-emerald-500" />
+        }
+      </div>
+
+      {/* Name */}
+      <p className={`flex-1 text-sm font-semibold truncate ${noOrders ? 'text-gray-300' : 'text-gray-600'}`}>
+        {p.name}
+      </p>
+
+      {/* Compliance bar + % */}
+      {!noOrders && (
+        <div className="flex items-center gap-2 shrink-0 w-28 sm:w-36">
+          <ComplianceBar value={p.weeklyCompliance} size="sm" />
+          <span className="text-[10px] font-bold text-emerald-600 w-8 text-right shrink-0">
+            {p.weeklyCompliance}%
+          </span>
+        </div>
+      )}
+
+      {/* Orders */}
+      <span className={`text-[10px] font-semibold shrink-0 w-14 text-right ${noOrders ? 'text-gray-200' : 'text-gray-400'}`}>
+        {noOrders ? 'sin órdenes' : `${p.totalOrders} ords.`}
+      </span>
+    </div>
+  )
+}
+
+/* ─── Main Export ────────────────────────────────────────────────────────── */
 
 export default function ProviderTable({ providers }) {
   if (providers.length === 0) {
@@ -72,63 +122,48 @@ export default function ProviderTable({ providers }) {
     )
   }
 
-  return (
-    <>
-      {/* Mobile: card list */}
-      <div className="sm:hidden divide-y divide-gray-50">
-        {providers.map(p => <ProviderCard key={p.id} p={p} />)}
-      </div>
+  const failing = providers.filter(p => p.status === 'pendiente' || p.status === 'parcial')
+  const good    = providers.filter(p => p.status === 'al-dia' || p.status === 'sin-ordenes')
 
-      {/* Desktop: table */}
-      <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-gray-50">
-              {['Proveedor (lavandería)', 'Estado hoy', 'Guías pendientes', 'Cumplimiento semanal', 'Total órdenes'].map(h => (
-                <th key={h} className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider px-6 py-3 first:pl-6 last:text-center">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {providers.map(p => {
-              const st = STATUS[p.status] ?? STATUS['sin-ordenes']
-              const Icon = st.icon
-              return (
-                <tr key={p.id} className="hover:bg-gray-50/60 transition-colors group">
-                  <td className="px-6 py-4">
-                    <p className="font-semibold text-gray-800 text-sm group-hover:text-[#0890f1] transition-colors">
-                      {p.name}
-                    </p>
-                    <p className="text-[10px] text-gray-300 font-mono mt-0.5 truncate max-w-[200px]">{p.id}</p>
-                  </td>
-                  <td className="px-4 py-4">
-                    <span className={`status-badge border ${st.cls}`}>
-                      <Icon size={10} />
-                      {st.label}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4 text-center">
-                    {(() => {
-                      const pending = p.totalOrders - p.totalWithGuia
-                      return pending > 0
-                        ? <span className="text-sm font-bold text-[#d94e27]">{pending}</span>
-                        : <span className="text-sm font-bold text-emerald-600">0</span>
-                    })()}
-                  </td>
-                  <td className="px-4 py-4 min-w-[160px]">
-                    <ComplianceBar value={p.weeklyCompliance} />
-                  </td>
-                  <td className="px-4 py-4 text-center text-sm font-semibold text-gray-500">
-                    {p.totalOrders}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </>
+  return (
+    <div className="space-y-6">
+
+      {/* ── Failing section ── */}
+      {failing.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingDown size={13} className="text-red-500" />
+            <h3 className="text-xs font-black text-red-600 uppercase tracking-widest">
+              Necesitan atención · {failing.length}
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {failing.map(p => <FailingCard key={p.id} p={p} />)}
+          </div>
+        </div>
+      )}
+
+      {/* ── Good section ── */}
+      {good.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingUp size={13} className="text-emerald-500" />
+            <h3 className="text-xs font-black text-emerald-600 uppercase tracking-widest">
+              Al corriente · {good.length}
+            </h3>
+          </div>
+          <div className="gl-card divide-y divide-gray-50 px-3">
+            {good.map(p => <GoodRow key={p.id} p={p} />)}
+          </div>
+        </div>
+      )}
+
+      {/* All good state */}
+      {failing.length === 0 && good.length > 0 && (
+        <div className="text-center py-2">
+          <p className="text-xs text-emerald-600 font-bold">🎉 Todos los proveedores al corriente hoy</p>
+        </div>
+      )}
+    </div>
   )
 }

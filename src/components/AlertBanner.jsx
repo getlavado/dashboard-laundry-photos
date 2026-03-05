@@ -5,19 +5,42 @@ export default function AlertBanner({ providers }) {
   const [dismissed, setDismissed] = useState(false)
   if (dismissed || providers.length === 0) return null
 
-  const names = providers.slice(0, 2).map(p => p.name).join(', ')
-  const more = providers.length > 2 ? ` +${providers.length - 2} más` : ''
+  const names  = providers.slice(0, 3).map(p => p.name).join(', ')
+  const more   = providers.length > 3 ? ` +${providers.length - 3} más` : ''
+  const urgent = providers.some(p => p.status === 'pendiente')
 
   return (
-    <div className="flex items-start gap-3 bg-[#f6653c]/10 border border-[#f6653c]/30 rounded-2xl px-4 py-3">
-      <div className="w-7 h-7 rounded-full bg-[#f6653c]/20 flex items-center justify-center shrink-0 mt-0.5">
-        <AlertTriangle size={13} className="text-[#f6653c]" />
+    <div className={`relative flex items-start gap-3 rounded-2xl px-4 py-4 overflow-hidden ${
+      urgent
+        ? 'bg-red-50 border-2 border-red-200'
+        : 'bg-amber-50 border-2 border-amber-200'
+    }`}>
+      {/* left accent stripe */}
+      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl ${urgent ? 'bg-red-500' : 'bg-amber-400'}`} />
+
+      <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+        urgent ? 'bg-red-100' : 'bg-amber-100'
+      }`}>
+        <AlertTriangle size={15} className={urgent ? 'text-red-600' : 'text-amber-600'} />
       </div>
-      <p className="text-sm text-[#d94e27] flex-1 font-medium">
-        <strong className="font-bold">{providers.length} proveedor{providers.length > 1 ? 'es' : ''} sin guías hoy:</strong>{' '}
-        <span className="font-normal">{names}{more}</span>
-      </p>
-      <button onClick={() => setDismissed(true)} className="text-[#f6653c]/40 hover:text-[#f6653c] transition-colors mt-0.5">
+
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-black leading-tight ${urgent ? 'text-red-800' : 'text-amber-800'}`}>
+          {providers.length} lavandería{providers.length > 1 ? 's' : ''} sin guías hoy
+        </p>
+        <p className={`text-xs font-medium mt-0.5 truncate ${urgent ? 'text-red-600' : 'text-amber-600'}`}>
+          {names}{more}
+        </p>
+      </div>
+
+      <button
+        onClick={() => setDismissed(true)}
+        className={`shrink-0 mt-0.5 p-1 rounded-lg transition-colors ${
+          urgent
+            ? 'text-red-300 hover:text-red-600 hover:bg-red-100'
+            : 'text-amber-300 hover:text-amber-600 hover:bg-amber-100'
+        }`}
+      >
         <X size={14} />
       </button>
     </div>

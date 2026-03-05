@@ -153,29 +153,40 @@ app.get('/api/explore', async (req, res) => {
 })
 
 /**
- * GET /api/stats?days=7
- * Main dashboard endpoint. Returns summary KPIs, daily trend and per-provider table.
+ * GET /api/stats?month=YYYY-MM
+ * Main dashboard endpoint. Filters by deliveryDate in the given month (default: current).
+ * Only counts orders whose delivery date has already passed (real compliance).
+ * Excludes cancelled orders.
  */
 app.get('/api/stats', async (req, res) => {
   if (!db) return res.status(500).json({ error: `Firebase not initialized: ${firebaseInitError}` })
   try {
-    const days = Math.min(parseInt(req.query.days) || 7, 90)
-    const cacheKey = `stats_${days}`
+    const now = new Date()
+
+    // Parse month param — default to current month (YYYY-MM)
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const monthParam = (req.query.month || currentMonthStr).slice(0, 7)
+    const [yearStr, monthStr] = monthParam.split('-')
+    const year  = parseInt(yearStr)
+    const month = parseInt(monthStr) // 1-based
+
+    const cacheKey = `stats_${monthParam}`
     const cached = cacheGet(cacheKey)
     if (cached) return res.json(cached)
 
-    // Always start from Jan 1 2026 at minimum (user request)
-    const year2026Start = new Date('2026-01-01T00:00:00.000Z')
-    const rollingStart = new Date()
-    rollingStart.setDate(rollingStart.getDate() - days)
-    rollingStart.setHours(0, 0, 0, 0)
-    const start = rollingStart > year2026Start ? rollingStart : year2026Start
+    // ── Date range ────────────────────────────────────────────────────────────
+    // Start: first day of selected month at 00:00
+    const firstOfMonth = new Date(year, month - 1, 1, 0, 0, 0, 0)
+    // End: last day of month at 23:59, but cap at "now" for current month
+    const lastOfMonth  = new Date(year, month, 0, 23, 59, 59, 999)
+    const isCurrentMonth = monthParam === currentMonthStr
+    const queryEnd = isCurrentMonth ? now : lastOfMonth
 
-    // Fetch orders for the date range (2026 only)
-    let query = db.collection(ORDERS_COLLECTION)
-      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(start))
-
-    const snap = await query.get()
+    // Query by deliveryDate — only orders that should already have a guía
+    const snap = await db.collection(ORDERS_COLLECTION)
+      .where('deliveryDate', '>=', admin.firestore.Timestamp.fromDate(firstOfMonth))
+      .where('deliveryDate', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
+      .get()
 
     // Resolve guía field if still unknown
     if (!resolvedGuiaField && snap.docs.length > 0) {
@@ -183,30 +194,32 @@ app.get('/api/stats', async (req, res) => {
     }
     const guiaField = resolvedGuiaField || 'guiaUrl'
 
-    // Filter only B2B orders (some might not have the flag)
+    // Filter: B2B only + exclude cancelled orders
     const orders = snap.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(o => o.isB2B === true || o.isB2B === undefined) // include all if field missing
+      .filter(o => {
+        const status = (o.status || '').toLowerCase()
+        if (status.includes('cancel')) return false
+        return o.isB2B === true || o.isB2B === undefined
+      })
 
-    // ── Aggregate ────────────────────────────────────────────────────────────
-    const byDate = {}     // { 'YYYY-MM-DD': { total, withGuia, laundries: Set } }
+    // ── Aggregate by deliveryDate ─────────────────────────────────────────────
+    const byDate    = {}  // { 'YYYY-MM-DD': { total, withGuia, laundries: Set } }
     const byLaundry = {}  // { laundryId: { name, total, withGuia, byDate } }
 
     for (const order of orders) {
-      const d = toDate(order.createdAt)
+      const d = toDate(order.deliveryDate)   // ← deliveryDate, not createdAt
       if (!d) continue
       const dateKey = formatDate(d)
-      const lid = order.assignmentData?.laundryId || 'sin-asignar'
+      const lid   = order.assignmentData?.laundryId   || 'sin-asignar'
       const lname = order.assignmentData?.laundryName || 'Sin asignar'
       const hasGuia = hasGuiaValue(order[guiaField])
 
-      // By date
       if (!byDate[dateKey]) byDate[dateKey] = { total: 0, withGuia: 0, laundries: new Set() }
       byDate[dateKey].total++
       if (hasGuia) byDate[dateKey].withGuia++
       byDate[dateKey].laundries.add(lid)
 
-      // By laundry
       if (!byLaundry[lid]) byLaundry[lid] = { id: lid, name: lname, total: 0, withGuia: 0, byDate: {} }
       byLaundry[lid].total++
       if (hasGuia) byLaundry[lid].withGuia++
@@ -215,52 +228,54 @@ app.get('/api/stats', async (req, res) => {
       if (hasGuia) byLaundry[lid].byDate[dateKey].withGuia++
     }
 
-    // ── Daily trend (last N days) ─────────────────────────────────────────────
+    // ── Daily trend: every day of selected month up to queryEnd ──────────────
     const dailyStats = []
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      d.setHours(0, 0, 0, 0)
-      const key = formatDate(d)
+    const cursor = new Date(firstOfMonth)
+    while (cursor <= queryEnd) {
+      const key   = formatDate(cursor)
       const entry = byDate[key] || { total: 0, withGuia: 0, laundries: new Set() }
       dailyStats.push({
-        date: key,
-        label: d.toLocaleDateString('es-PE', { weekday: 'short', month: 'short', day: 'numeric' }),
-        total: entry.total,
-        withGuia: entry.withGuia,
-        sinGuia: entry.total - entry.withGuia,
-        complianceRate: entry.total > 0 ? Math.round((entry.withGuia / entry.total) * 100) : 0,
-        activeProviders: entry.laundries.size,
+        date:            key,
+        label:           new Date(cursor).toLocaleDateString('es-PE', { weekday: 'short', month: 'short', day: 'numeric' }),
+        total:           entry.total,
+        withGuia:        entry.withGuia,
+        sinGuia:         entry.total - entry.withGuia,
+        complianceRate:  entry.total > 0 ? Math.round((entry.withGuia / entry.total) * 100) : 0,
+        activeProviders: entry.laundries instanceof Set ? entry.laundries.size : 0,
       })
+      cursor.setDate(cursor.getDate() + 1)
     }
 
     // ── Per-provider table ────────────────────────────────────────────────────
-    const today = formatDate(new Date())
+    const today = formatDate(now)
     const providers = Object.values(byLaundry).map(l => {
       const t = l.byDate[today] || { total: 0, withGuia: 0 }
-      const weeklyDays = dailyStats.filter(d => l.byDate[d.date])
-      const weeklyAvg = weeklyDays.length > 0
-        ? Math.round(weeklyDays.reduce((sum, d) => {
+
+      // Monthly compliance average (across all days with activity)
+      const activeDays = dailyStats.filter(d => l.byDate[d.date])
+      const monthlyAvg = activeDays.length > 0
+        ? Math.round(activeDays.reduce((sum, d) => {
             const ld = l.byDate[d.date] || { total: 0, withGuia: 0 }
             return sum + (ld.total > 0 ? (ld.withGuia / ld.total) * 100 : 0)
-          }, 0) / weeklyDays.length)
+          }, 0) / activeDays.length)
         : 0
 
+      // Today's status based on deliveries due today
       const status =
-        t.total === 0 ? 'sin-ordenes'
+        t.total === 0    ? 'sin-ordenes'
         : t.withGuia === t.total ? 'al-dia'
-        : t.withGuia > 0 ? 'parcial'
+        : t.withGuia > 0         ? 'parcial'
         : 'pendiente'
 
       return {
-        id: l.id,
-        name: l.name,
-        todayOrders: t.total,
-        todayWithGuia: t.withGuia,
+        id:             l.id,
+        name:           l.name,
+        todayOrders:    t.total,
+        todayWithGuia:  t.withGuia,
         todayCompliance: t.total > 0 ? Math.round((t.withGuia / t.total) * 100) : 0,
-        weeklyCompliance: weeklyAvg,
-        totalOrders: l.total,
-        totalWithGuia: l.withGuia,
+        weeklyCompliance: monthlyAvg,   // field name kept for frontend compat
+        totalOrders:    l.total,
+        totalWithGuia:  l.withGuia,
         status,
       }
     }).sort((a, b) => {
@@ -272,20 +287,23 @@ app.get('/api/stats', async (req, res) => {
     const todayEntry = byDate[today] || { total: 0, withGuia: 0, laundries: new Set() }
     const allWithGuia = orders.filter(o => hasGuiaValue(o[guiaField])).length
 
-    // ── Pending orders (no guía) ──────────────────────────────────────────────
+    // ── Pending orders (no guía, sorted by oldest delivery first) ────────────
     const pendingOrders = orders
       .filter(o => !hasGuiaValue(o[guiaField]))
       .map(o => ({
-        id: o.id,
-        laundryName: o.assignmentData?.laundryName || 'Sin asignar',
-        laundryId: o.assignmentData?.laundryId || null,
-        createdAt: toDate(o.createdAt)?.toISOString() || null,
-        status: o.status || null,
+        id:           o.id,
+        laundryName:  o.assignmentData?.laundryName || 'Sin asignar',
+        laundryId:    o.assignmentData?.laundryId   || null,
+        deliveryDate: toDate(o.deliveryDate)?.toISOString() || null,
+        createdAt:    toDate(o.createdAt)?.toISOString()    || null,
+        status:       o.status || null,
       }))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .sort((a, b) => new Date(a.deliveryDate || 0) - new Date(b.deliveryDate || 0))
 
     const result = {
       guiaField,
+      month: monthParam,
+      isCurrentMonth,
       summary: {
         today: {
           date: today,
@@ -294,12 +312,12 @@ app.get('/api/stats', async (req, res) => {
           ordersWithout: todayEntry.total - todayEntry.withGuia,
           complianceRate: todayEntry.total > 0
             ? Math.round((todayEntry.withGuia / todayEntry.total) * 100) : 0,
-          activeProviders: todayEntry.laundries.size,
+          activeProviders: todayEntry.laundries instanceof Set ? todayEntry.laundries.size : 0,
           compliantProviders: providers.filter(p => p.status === 'al-dia').length,
           pendingProviders: providers.filter(p => p.status === 'pendiente' || p.status === 'parcial').length,
         },
         period: {
-          days,
+          month: monthParam,
           totalOrders: orders.length,
           totalWithGuia: allWithGuia,
           avgComplianceRate: dailyStats.length > 0

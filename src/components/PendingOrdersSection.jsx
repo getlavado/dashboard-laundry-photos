@@ -77,7 +77,7 @@ export default function PendingOrdersSection({ orders = [], loading }) {
                 <div className="min-w-0">
                   <p className="font-semibold text-gray-800 text-xs truncate">{o.laundryName}</p>
                   <p className="text-[10px] text-gray-300 font-mono mt-0.5 truncate">{o.id}</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">{formatDate(o.createdAt)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Entrega: {formatDate(o.deliveryDate)}</p>
                 </div>
                 <a
                   href={`${ADMIN_BASE}/${o.id}`}
@@ -100,7 +100,7 @@ export default function PendingOrdersSection({ orders = [], loading }) {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-50">
-                  {['Lavandería', 'ID orden', 'Fecha', ''].map((h, i) => (
+                  {['Lavandería', 'ID orden', 'Fecha entrega', ''].map((h, i) => (
                     <th
                       key={i}
                       className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider px-6 py-2.5 last:text-right"
@@ -122,7 +122,7 @@ export default function PendingOrdersSection({ orders = [], loading }) {
                       <p className="text-xs font-mono text-gray-400 truncate max-w-[180px]">{o.id}</p>
                     </td>
                     <td className="px-6 py-3">
-                      <p className="text-xs text-gray-500">{formatDate(o.createdAt)}</p>
+                      <p className="text-xs text-gray-500">{formatDate(o.deliveryDate)}</p>
                     </td>
                     <td className="px-6 py-3 text-right">
                       <a
