@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(chmod +x /Users/macbook2020/Documents/projects/experiments/claude_code/getlavado/start-vite.sh)",
+      "Bash(curl -s http://localhost:3001/api/explore)",
+      "Bash(curl -s \"http://localhost:3001/api/stats?days=7\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -c \":*)",
+      "Bash(curl -v \"http://localhost:3001/api/stats?days=7\")",
+      "Bash(lsof -ti:5173,5174)",
+      "Bash(xargs kill -9)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(curl -s http://127.0.0.1:5173)",
+      "WebFetch(domain:getlavado.com)"
+    ]
+  }
+}
