@@ -44,8 +44,13 @@ try {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const ORDERS_COLLECTION =
-  'glLaundries/PE/states/KE5K5W3HreHRVdVAbVlH/cities/JZ0HzixP6iysCfUz7zoF/orders'
+const BASE_PATH       = 'glLaundries/PE/states/KE5K5W3HreHRVdVAbVlH/cities/JZ0HzixP6iysCfUz7zoF'
+const ORDERS_COLLECTION    = `${BASE_PATH}/orders`
+const LAUNDRIES_COLLECTION = `${BASE_PATH}/laundries`
+
+// Laundries excluded from the dashboard
+const EXCLUDED_LAUNDRY_IDS   = new Set(['qBNRz2giHEVlWZBrWbCy'])
+const EXCLUDED_LAUNDRY_NAMES = new Set(['Lavanderia John Doe', 'Lavandería John Doe'])
 
 // Candidate field names for the guía URL (priority order)
 const GUIA_CANDIDATES = [
@@ -112,6 +117,7 @@ app.get('/api/health', (req, res) => {
     node: process.version,
   })
 })
+
 
 /**
  * GET /api/explore
@@ -278,7 +284,9 @@ app.get('/api/stats', async (req, res) => {
         totalWithGuia:  l.withGuia,
         status,
       }
-    }).sort((a, b) => {
+    }).filter(p =>
+      !EXCLUDED_LAUNDRY_IDS.has(p.id) && !EXCLUDED_LAUNDRY_NAMES.has(p.name)
+    ).sort((a, b) => {
       const order = { 'pendiente': 0, 'parcial': 1, 'al-dia': 2, 'sin-ordenes': 3 }
       return (order[a.status] ?? 4) - (order[b.status] ?? 4)
     })
@@ -289,7 +297,14 @@ app.get('/api/stats', async (req, res) => {
 
     // ── Pending orders (no guía, sorted by oldest delivery first) ────────────
     const pendingOrders = orders
-      .filter(o => !hasGuiaValue(o[guiaField]))
+      .filter(o => {
+        if (hasGuiaValue(o[guiaField])) return false
+        const lid   = o.assignmentData?.laundryId   || null
+        const lname = o.assignmentData?.laundryName || ''
+        if (lid   && EXCLUDED_LAUNDRY_IDS.has(lid))     return false
+        if (lname && EXCLUDED_LAUNDRY_NAMES.has(lname)) return false
+        return true
+      })
       .map(o => ({
         id:           o.id,
         laundryName:  o.assignmentData?.laundryName || 'Sin asignar',
