@@ -13,7 +13,12 @@
       "Bash(xargs kill -9)",
       "Bash(curl -s http://localhost:5173)",
       "Bash(curl -s http://127.0.0.1:5173)",
-      "WebFetch(domain:getlavado.com)"
+      "WebFetch(domain:getlavado.com)",
+      "Bash(curl -s \"http://localhost:3001/api/explore\" -o /tmp/explore.json)",
+      "Bash(/usr/local/bin/node /tmp/explore.json)",
+      "Bash(curl -s \"http://localhost:3001/api/stats?month=2026-03\" -o /tmp/stats_new.json)",
+      "Bash(/usr/local/bin/node -e \":*)",
+      "Bash(curl -s http://localhost:5173/)"
     ]
   }
 }
