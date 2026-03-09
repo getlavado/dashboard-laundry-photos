@@ -5,6 +5,7 @@ import WeeklyChart from './components/WeeklyChart'
 import ProviderTable from './components/ProviderTable'
 import AlertBanner from './components/AlertBanner'
 import PendingOrdersSection from './components/PendingOrdersSection'
+import InsightsSection from './components/InsightsSection'
 import { RefreshCw, ChevronLeft, ChevronRight, Building2, AlertCircle } from 'lucide-react'
 
 const REFRESH_INTERVAL = 5 * 60 * 1000
@@ -159,6 +160,9 @@ export default function App() {
         {!loading && pendingProviders.length > 0 && (
           <AlertBanner providers={pendingProviders} />
         )}
+
+        {/* ── Insights ── */}
+        {!loading && s && <InsightsSection summary={s} />}
 
         {/* ── HERO: Provider scorecards ── */}
         <div className="gl-card p-4 sm:p-6">

@@ -1,4 +1,5 @@
-import { CheckCircle2, AlertCircle, Clock, MinusCircle, TrendingDown, TrendingUp } from 'lucide-react'
+import { CheckCircle2, AlertCircle, Clock, MinusCircle, TrendingDown, TrendingUp, ChevronDown } from 'lucide-react'
+import { useState } from 'react'
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -114,6 +115,8 @@ function GoodRow({ p }) {
 /* ─── Main Export ────────────────────────────────────────────────────────── */
 
 export default function ProviderTable({ providers }) {
+  const [showInactive, setShowInactive] = useState(false)
+
   if (providers.length === 0) {
     return (
       <div className="p-12 text-center text-gray-300 text-sm font-medium">
@@ -122,8 +125,9 @@ export default function ProviderTable({ providers }) {
     )
   }
 
-  const failing = providers.filter(p => p.status === 'pendiente' || p.status === 'parcial')
-  const good    = providers.filter(p => p.status === 'al-dia' || p.status === 'sin-ordenes')
+  const failing  = providers.filter(p => p.status === 'pendiente' || p.status === 'parcial')
+  const active   = providers.filter(p => p.status === 'al-dia')
+  const inactive = providers.filter(p => p.status === 'sin-ordenes')
 
   return (
     <div className="space-y-6">
@@ -143,25 +147,48 @@ export default function ProviderTable({ providers }) {
         </div>
       )}
 
-      {/* ── Good section ── */}
-      {good.length > 0 && (
+      {/* ── Active + compliant section ── */}
+      {active.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-2">
             <TrendingUp size={13} className="text-emerald-500" />
             <h3 className="text-xs font-black text-emerald-600 uppercase tracking-widest">
-              Al corriente · {good.length}
+              Al corriente · {active.length}
             </h3>
           </div>
           <div className="gl-card divide-y divide-gray-50 px-3">
-            {good.map(p => <GoodRow key={p.id} p={p} />)}
+            {active.map(p => <GoodRow key={p.id} p={p} />)}
           </div>
         </div>
       )}
 
       {/* All good state */}
-      {failing.length === 0 && good.length > 0 && (
-        <div className="text-center py-2">
-          <p className="text-xs text-emerald-600 font-bold">🎉 Todos los proveedores al corriente hoy</p>
+      {failing.length === 0 && active.length > 0 && (
+        <div className="text-center py-1">
+          <p className="text-xs text-emerald-600 font-bold">Todos los proveedores activos al corriente hoy</p>
+        </div>
+      )}
+
+      {/* ── Inactive section — collapsed by default ── */}
+      {inactive.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowInactive(v => !v)}
+            className="flex items-center gap-1.5 text-[10px] font-bold text-gray-300 hover:text-gray-500 transition-colors uppercase tracking-widest"
+          >
+            <ChevronDown size={11} className={`transition-transform ${showInactive ? 'rotate-180' : ''}`} />
+            {inactive.length} sin órdenes este mes
+          </button>
+          {showInactive && (
+            <div className="mt-2 divide-y divide-gray-50 px-1">
+              {inactive.map(p => (
+                <div key={p.id} className="flex items-center gap-2 py-2 text-gray-300">
+                  <MinusCircle size={12} />
+                  <span className="text-xs font-medium">{p.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

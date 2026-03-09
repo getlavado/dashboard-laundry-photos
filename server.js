@@ -300,6 +300,38 @@ app.get('/api/stats', async (req, res) => {
       }))
       .sort((a, b) => new Date(a.deliveryDate || 0) - new Date(b.deliveryDate || 0))
 
+    // ── Insight helpers ───────────────────────────────────────────────────────
+    const daysInMonth   = new Date(year, month, 0).getDate()
+    const dayOfMonth    = isCurrentMonth ? new Date().getDate() : daysInMonth
+    const totalWithout  = orders.length - allWithGuia
+    const overallRate   = orders.length > 0 ? Math.round((allWithGuia / orders.length) * 100) : 0
+
+    // Projected compliance at month-end if pace stays constant
+    const projectedCompliance = (dayOfMonth > 0 && daysInMonth > 0)
+      ? Math.min(100, Math.round(overallRate)) // already full-month if past
+      : overallRate
+
+    // Worst provider by monthly compliance (with orders, non-perfect)
+    const activeProviders = providers.filter(p => p.totalOrders > 0)
+    const worstProvider   = activeProviders
+      .filter(p => p.totalOrders >= 3) // ignore micro-providers
+      .sort((a, b) => a.weeklyCompliance - b.weeklyCompliance)[0] || null
+    const bestProvider    = activeProviders
+      .sort((a, b) => b.weeklyCompliance - a.weeklyCompliance)[0] || null
+
+    // Daily average guías uploaded so far
+    const activeDaysSoFar = dailyStats.filter(d => d.total > 0).length
+    const avgGuiasPerDay  = activeDaysSoFar > 0
+      ? Math.round(allWithGuia / activeDaysSoFar) : 0
+
+    // Trend: compare last 3 days vs 3 days before that
+    const recentDays = dailyStats.slice(-6)
+    const last3  = recentDays.slice(-3)
+    const prev3  = recentDays.slice(0, 3)
+    const last3Avg = last3.filter(d=>d.total>0).reduce((s,d)=>s+d.complianceRate,0) / (last3.filter(d=>d.total>0).length || 1)
+    const prev3Avg = prev3.filter(d=>d.total>0).reduce((s,d)=>s+d.complianceRate,0) / (prev3.filter(d=>d.total>0).length || 1)
+    const trend = last3Avg > prev3Avg + 5 ? 'up' : last3Avg < prev3Avg - 5 ? 'down' : 'flat'
+
     const result = {
       guiaField,
       month: monthParam,
@@ -320,9 +352,18 @@ app.get('/api/stats', async (req, res) => {
           month: monthParam,
           totalOrders: orders.length,
           totalWithGuia: allWithGuia,
+          totalWithout,
+          overallRate,
           avgComplianceRate: dailyStats.length > 0
             ? Math.round(dailyStats.reduce((s, d) => s + d.complianceRate, 0) / dailyStats.length) : 0,
           totalProviders: providers.length,
+          daysInMonth,
+          dayOfMonth,
+          projectedCompliance,
+          avgGuiasPerDay,
+          trend,
+          worstProvider: worstProvider ? { name: worstProvider.name, compliance: worstProvider.weeklyCompliance, pending: worstProvider.totalOrders - worstProvider.totalWithGuia } : null,
+          bestProvider:  bestProvider  ? { name: bestProvider.name,  compliance: bestProvider.weeklyCompliance  } : null,
         },
       },
       dailyStats,
