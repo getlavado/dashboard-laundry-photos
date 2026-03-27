@@ -23,9 +23,10 @@ function groupByLaundry(orders) {
 
 /* ─── Per-laundry collapsible group ─────────────────────────────────────── */
 
-function LaundryGroup({ group }) {
+function LaundryGroup({ group, total }) {
   const [open, setOpen] = useState(false)
   const count = group.orders.length
+  const pct   = total > 0 ? Math.round((count / total) * 100) : 0
 
   const accent =
     count >= 5 ? { bar: 'bg-red-500',   bg: 'bg-red-50',   text: 'text-red-700',   badge: 'bg-red-100 text-red-700 border-red-200' } :
@@ -46,9 +47,11 @@ function LaundryGroup({ group }) {
           <p className={`text-xs font-black truncate ${accent.text}`}>{group.name}</p>
         </div>
 
-        <span className={`shrink-0 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${accent.badge}`}>
-          {count} sin guía
-        </span>
+        <div className={`shrink-0 flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${accent.badge}`}>
+          <span>{count} sin guía</span>
+          <span className="opacity-50">·</span>
+          <span>{pct}%</span>
+        </div>
 
         <ChevronDown
           size={13}
@@ -123,7 +126,7 @@ export default function PendingOrdersSection({ orders = [], loading }) {
       {/* Collapsible body */}
       {open && (
         <div className="border-t border-gray-50 px-4 sm:px-6 py-4 space-y-2.5">
-          {groups.map(g => <LaundryGroup key={g.id} group={g} />)}
+          {groups.map(g => <LaundryGroup key={g.id} group={g} total={orders.length} />)}
         </div>
       )}
     </div>
