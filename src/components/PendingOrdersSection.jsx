@@ -50,7 +50,7 @@ function LaundryGroup({ group, total }) {
         <div className={`shrink-0 flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${accent.badge}`}>
           <span>{count} sin guía</span>
           <span className="opacity-50">·</span>
-          <span>{pct}%</span>
+          <span title="Porcentaje del total de órdenes pendientes que corresponde a esta lavandería">{pct}% del pendiente</span>
         </div>
 
         <ChevronDown
