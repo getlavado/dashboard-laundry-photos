@@ -45,7 +45,7 @@ try {
 // ─── Constants ───────────────────────────────────────────────────────────────
 const BASE_PATH            = 'glLaundries/PE/states/KE5K5W3HreHRVdVAbVlH/cities/JZ0HzixP6iysCfUz7zoF'
 const ORDERS_COLLECTION    = `${BASE_PATH}/orders`
-const LAUNDRIES_COLLECTION = `${BASE_PATH}/laundries`
+const LAUNDRIES_COLLECTION = 'laundries'
 
 const EXCLUDED_LAUNDRY_IDS   = new Set(['qBNRz2giHEVlWZBrWbCy'])
 const EXCLUDED_LAUNDRY_NAMES = new Set(['Lavanderia John Doe', 'Lavandería John Doe'])
@@ -214,6 +214,28 @@ app.get('/api/stats', async (req, res) => {
         return o.isB2B === true || o.isB2B === undefined
       })
 
+    // ── Collect unique laundry IDs from orders ────────────────────────────────
+    const uniqueLaundryIds = [...new Set(
+      orders.map(o => o.assignmentData?.laundryId).filter(Boolean)
+    )]
+
+    // ── Fetch each laundry doc by ID and build shortCode lookup ───────────────
+    const cachedNames = cacheGet('laundries')
+    let laundryShortNames = cachedNames || {}
+
+    if (!cachedNames) {
+      const fetches = await Promise.all(
+        uniqueLaundryIds.map(id => db.collection(LAUNDRIES_COLLECTION).doc(id).get())
+      )
+      for (const doc of fetches) {
+        if (doc.exists) {
+          const d = doc.data()
+          laundryShortNames[doc.id] = d.shortCode || d.name || null
+        }
+      }
+      cacheSet('laundries', laundryShortNames)
+    }
+
     // ── Aggregate ─────────────────────────────────────────────────────────────
     const byDate    = {}
     const byLaundry = {}
@@ -223,7 +245,7 @@ app.get('/api/stats', async (req, res) => {
       if (!d) continue
       const dateKey = formatDate(d)
       const lid     = order.assignmentData?.laundryId   || 'sin-asignar'
-      const lname   = order.assignmentData?.laundryName || 'Sin asignar'
+      const lname   = laundryShortNames[lid] || order.assignmentData?.laundryName || 'Sin asignar'
       const hasGuia = hasGuiaValue(order[guiaField])
 
       if (!byDate[dateKey]) byDate[dateKey] = { total: 0, withGuia: 0, laundries: new Set() }
@@ -315,7 +337,7 @@ app.get('/api/stats', async (req, res) => {
       })
       .map(o => ({
         id:           o.id,
-        laundryName:  o.assignmentData?.laundryName || 'Sin asignar',
+        laundryName:  laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
         laundryId:    o.assignmentData?.laundryId   || null,
         deliveryDate: toDate(o.deliveryDate)?.toISOString() || null,
         createdAt:    toDate(o.createdAt)?.toISOString()    || null,
