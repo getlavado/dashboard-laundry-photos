@@ -44,8 +44,9 @@ try {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const BASE_PATH            = 'glLaundries/PE/states/KE5K5W3HreHRVdVAbVlH/cities/JZ0HzixP6iysCfUz7zoF'
-const ORDERS_COLLECTION    = `${BASE_PATH}/orders`
-const LAUNDRIES_COLLECTION = 'laundries'
+const ORDERS_COLLECTION      = `${BASE_PATH}/orders`
+const LAUNDRIES_COLLECTION   = 'laundries'
+const B2B_PARTNERS_COLLECTION = 'b2bPartners'
 
 const EXCLUDED_LAUNDRY_IDS   = new Set(['qBNRz2giHEVlWZBrWbCy'])
 const EXCLUDED_LAUNDRY_NAMES = new Set(['Lavanderia John Doe', 'Lavandería John Doe'])
@@ -236,6 +237,26 @@ app.get('/api/stats', async (req, res) => {
       cacheSet('laundries', laundryShortNames)
     }
 
+    // ── Collect unique b2bPartner IDs and fetch names ─────────────────────────
+    const uniqueB2BIds = [...new Set(
+      orders.map(o => o.b2bPartner?.id).filter(Boolean)
+    )]
+
+    const cachedB2BNames = cacheGet('b2bPartners')
+    let b2bPartnerNames = cachedB2BNames || {}
+
+    if (!cachedB2BNames && uniqueB2BIds.length > 0) {
+      const b2bFetches = await Promise.all(
+        uniqueB2BIds.map(id => db.collection(B2B_PARTNERS_COLLECTION).doc(id).get())
+      )
+      for (const doc of b2bFetches) {
+        if (doc.exists) {
+          b2bPartnerNames[doc.id] = doc.data().name || null
+        }
+      }
+      cacheSet('b2bPartners', b2bPartnerNames)
+    }
+
     // ── Aggregate ─────────────────────────────────────────────────────────────
     const byDate    = {}
     const byLaundry = {}
@@ -336,12 +357,15 @@ app.get('/api/stats', async (req, res) => {
         return true
       })
       .map(o => ({
-        id:           o.id,
-        laundryName:  laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
-        laundryId:    o.assignmentData?.laundryId   || null,
-        deliveryDate: toDate(o.deliveryDate)?.toISOString() || null,
-        createdAt:    toDate(o.createdAt)?.toISOString()    || null,
-        status:       o.status || null,
+        id:              o.id,
+        laundryName:     laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
+        laundryId:       o.assignmentData?.laundryId   || null,
+        pickUpTime:      toDate(o.pickUpTime)?.toISOString()    || null,
+        deliveryDate:    toDate(o.deliveryDate)?.toISOString() || null,
+        createdAt:       toDate(o.createdAt)?.toISOString()    || null,
+        status:          o.status || null,
+        b2bPartnerName:  b2bPartnerNames[o.b2bPartner?.id] || null,
+        b2bPartnerId:    o.b2bPartner?.id || null,
       }))
       .sort((a, b) => new Date(a.deliveryDate || 0) - new Date(b.deliveryDate || 0))
 

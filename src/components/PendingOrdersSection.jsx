@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ExternalLink, ChevronDown, ChevronUp, AlertCircle, Package } from 'lucide-react'
+import { ExternalLink, ChevronDown, ChevronUp, AlertCircle, Package, Copy, Check } from 'lucide-react'
 
 const ADMIN_BASE = 'https://admin.getlavado.com/admin/services'
 
@@ -8,6 +8,22 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString('es-PE', {
     day: '2-digit', month: 'short', year: 'numeric',
   })
+}
+
+function formatShortDate(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function buildCopyText(group) {
+  const lines = [
+    `TOTAL DE GUIAS PENDIENTES: ${group.orders.length}`,
+    '',
+    'ATT',
+    ...group.orders.map(o => `* ${o.b2bPartnerName || o.id} ${formatShortDate(o.deliveryDate)}`),
+  ]
+  return lines.join('\n')
 }
 
 function groupByLaundry(orders) {
@@ -24,7 +40,16 @@ function groupByLaundry(orders) {
 
 function LaundryGroup({ group, total }) {
   const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
   const count = group.orders.length
+
+  function handleCopy(e) {
+    e.stopPropagation()
+    navigator.clipboard.writeText(buildCopyText(group)).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
   const pct   = total > 0 ? Math.round((count / total) * 100) : 0
 
   const accent =
@@ -67,6 +92,18 @@ function LaundryGroup({ group, total }) {
           <span title="Porcentaje del total de órdenes pendientes">{pct}% del pendiente</span>
         </div>
 
+        <button
+          onClick={handleCopy}
+          title="Copiar resumen"
+          className={`shrink-0 flex items-center justify-center w-6 h-6 rounded-lg transition-colors ${
+            copied
+              ? 'bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400'
+              : 'bg-white/60 dark:bg-gray-700/60 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+          }`}
+        >
+          {copied ? <Check size={11} /> : <Copy size={11} />}
+        </button>
+
         <ChevronDown
           size={13}
           className={`shrink-0 text-gray-400 dark:text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
@@ -80,7 +117,15 @@ function LaundryGroup({ group, total }) {
               <Package size={11} className="text-gray-300 dark:text-gray-600 shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-mono text-gray-400 dark:text-gray-500 truncate">{o.id}</p>
-                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">Entrega: {formatDate(o.deliveryDate)}</p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 flex flex-wrap items-center gap-x-1.5">
+                  {o.pickUpTime && <span>Recojo: {formatDate(o.pickUpTime)}</span>}
+                  {o.pickUpTime && <span className="opacity-40">·</span>}
+                  <span>Entrega: {formatDate(o.deliveryDate)}</span>
+                  {o.b2bPartnerName && <span className="opacity-40">·</span>}
+                  {o.b2bPartnerName && (
+                    <span className="text-[#0890f1] dark:text-blue-400 font-medium">{o.b2bPartnerName}</span>
+                  )}
+                </p>
               </div>
               <a
                 href={`${ADMIN_BASE}/${o.id}`}
