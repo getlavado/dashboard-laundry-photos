@@ -16,12 +16,20 @@ function formatShortDate(iso) {
   return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
+function missingLabel(type) {
+  return type === 'recojo' ? 'guía de recojo' : 'guía de entrega'
+}
+
 function buildCopyText(group) {
+  const byType = [...group.orders].sort((a, b) => {
+    if (a.missingType === b.missingType) return 0
+    return a.missingType === 'recojo' ? -1 : 1
+  })
   const lines = [
     `TOTAL DE GUIAS PENDIENTES: ${group.orders.length}`,
     '',
     'ATT',
-    ...group.orders.map(o => `* ${o.b2bPartnerName || o.id} ${formatShortDate(o.deliveryDate)}`),
+    ...byType.map(o => `* ${o.b2bPartnerName || o.id} ${formatShortDate(o.deliveryDate)} — falta ${missingLabel(o.missingType)}`),
   ]
   return lines.join('\n')
 }
@@ -33,7 +41,13 @@ function groupByLaundry(orders) {
     if (!map[key]) map[key] = { id: key, name: o.laundryName, orders: [] }
     map[key].orders.push(o)
   }
-  return Object.values(map).sort((a, b) => b.orders.length - a.orders.length)
+  return Object.values(map)
+    .map(g => ({
+      ...g,
+      pickupCount:   g.orders.filter(o => o.missingType === 'recojo').length,
+      deliveryCount: g.orders.filter(o => o.missingType === 'entrega').length,
+    }))
+    .sort((a, b) => b.orders.length - a.orders.length)
 }
 
 /* ─── Per-laundry collapsible group ─────────────────────────────────────── */
@@ -87,7 +101,13 @@ function LaundryGroup({ group, total }) {
         </div>
 
         <div className={`shrink-0 flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${accent.badge}`}>
-          <span>{count} sin guía</span>
+          {group.pickupCount > 0 && group.deliveryCount > 0 ? (
+            <span title="Guías de recojo y de entrega que debe esta lavandería">
+              {group.pickupCount} recojo · {group.deliveryCount} entrega
+            </span>
+          ) : (
+            <span>{count} sin guía {group.pickupCount > 0 ? 'de recojo' : 'de entrega'}</span>
+          )}
           <span className="opacity-50">·</span>
           <span title="Porcentaje del total de órdenes pendientes">{pct}% del pendiente</span>
         </div>
@@ -113,7 +133,7 @@ function LaundryGroup({ group, total }) {
       {open && (
         <div className="divide-y divide-gray-50 dark:divide-gray-800 bg-white dark:bg-gray-900">
           {group.orders.map(o => (
-            <div key={o.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors">
+            <div key={`${o.id}-${o.missingType}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors">
               <Package size={11} className="text-gray-300 dark:text-gray-600 shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-mono text-gray-400 dark:text-gray-500 truncate">{o.id}</p>
@@ -127,6 +147,15 @@ function LaundryGroup({ group, total }) {
                   )}
                 </p>
               </div>
+              <span
+                className={`shrink-0 text-[9px] font-bold px-2 py-1 rounded-full border ${
+                  o.missingType === 'recojo'
+                    ? 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800/50'
+                    : 'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/50'
+                }`}
+              >
+                Falta {missingLabel(o.missingType)}
+              </span>
               <a
                 href={`${ADMIN_BASE}/${o.id}`}
                 target="_blank"
@@ -163,9 +192,9 @@ export default function PendingOrdersSection({ orders = [], loading }) {
             <AlertCircle size={15} className="text-[#d94e27]" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">Órdenes sin guía</h2>
+            <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">Guías pendientes</h2>
             <p className="text-[10px] text-gray-400 dark:text-gray-500 font-medium mt-0.5">
-              {orders.length} orden{orders.length !== 1 ? 'es' : ''} · {groups.length} lavandería{groups.length !== 1 ? 's' : ''}
+              {orders.length} pendiente{orders.length !== 1 ? 's' : ''} · {groups.length} lavandería{groups.length !== 1 ? 's' : ''}
             </p>
           </div>
         </div>

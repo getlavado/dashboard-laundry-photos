@@ -51,26 +51,21 @@ const B2B_PARTNERS_COLLECTION = 'b2bPartners'
 const EXCLUDED_LAUNDRY_IDS   = new Set(['qBNRz2giHEVlWZBrWbCy'])
 const EXCLUDED_LAUNDRY_NAMES = new Set(['Lavanderia John Doe', 'Lavandería John Doe'])
 
-const GUIA_CANDIDATES = [
-  'laundryInvoices',
-  'laundryPhotos',
-  'guiaUrl', 'guia', 'constanciaUrl', 'constancia',
-  'receiptUrl', 'receipt', 'guideUrl', 'guide',
-  'serviceReceiptUrl', 'imagenGuia', 'fotoGuia',
-  'serviceProof', 'proofUrl', 'voucherUrl',
-]
+// Cada orden debe acumular 2 comprobantes en este array al llegar a "delivered":
+// el primero es la guía de recojo, el segundo la de entrega.
+const GUIA_FIELD = 'laundryInvoices'
 
-function hasGuiaValue(val) {
-  if (!val) return false
-  if (Array.isArray(val)) return val.length > 0
-  if (typeof val === 'string') return val.trim().length > 0
-  if (typeof val === 'object') return Object.keys(val).length > 0
-  return !!val
+// En minúsculas porque siempre se compara contra status.toLowerCase() — cualquier
+// entrada aquí con una mayúscula (ej. 'pickedUp') nunca haría match y excluiría
+// en silencio todas las órdenes con ese status.
+const VALID_ORDER_STATUSES = new Set(
+  ['pending', 'processing', 'pickedup', 'delivered'].map(s => s.toLowerCase())
+)
+
+function invoiceCount(order) {
+  const val = order[GUIA_FIELD]
+  return Array.isArray(val) ? val.length : 0
 }
-
-let resolvedGuiaField = process.env.GUIA_FIELD !== 'auto'
-  ? process.env.GUIA_FIELD
-  : null
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function formatDate(date) {
@@ -84,15 +79,17 @@ function toDate(val) {
   return new Date(val)
 }
 
-function detectGuiaField(sampleDoc) {
-  const keys = Object.keys(sampleDoc)
-  for (const candidate of GUIA_CANDIDATES) {
-    if (keys.includes(candidate)) return candidate
-  }
-  const fallback = keys.find(k =>
-    /guia|constancia|receipt|voucher|proof|guide/i.test(k)
-  )
-  return fallback || null
+// referenceDay = "hoy" para efectos de esta orden: el día real (período actual)
+// o el último día del período que se está consultando (períodos pasados).
+function guiaStatus(order, referenceDay) {
+  const count    = invoiceCount(order)
+  const pickup   = toDate(order.pickUpTime)
+  const delivery = toDate(order.deliveryDate)
+
+  const missingPickup   = !!pickup   && formatDate(pickup)   < referenceDay && count < 1
+  const missingDelivery = !!delivery && formatDate(delivery) < referenceDay && count < 2
+
+  return { missingPickup, missingDelivery, isCompliant: !missingPickup && !missingDelivery }
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -120,23 +117,18 @@ app.get('/api/explore', async (req, res) => {
         id: doc.id,
         fieldNames: Object.keys(data),
         sample: {
-          status: data.status,
-          isB2B: data.isB2B,
-          laundryName: data.assignmentData?.laundryName,
-          createdAt: toDate(data.createdAt)?.toISOString(),
-          guiaCandidates: GUIA_CANDIDATES.reduce((acc, f) => {
-            if (data[f] !== undefined) acc[f] = data[f]
-            return acc
-          }, {}),
+          status:       data.status,
+          isB2B:        data.isB2B,
+          laundryName:  data.assignmentData?.laundryName,
+          createdAt:    toDate(data.createdAt)?.toISOString(),
+          pickUpTime:   toDate(data.pickUpTime)?.toISOString()   || null,
+          deliveryDate: toDate(data.deliveryDate)?.toISOString() || null,
+          invoiceCount: invoiceCount(data),
         },
       }
     })
 
-    if (!resolvedGuiaField && snap.docs.length > 0) {
-      resolvedGuiaField = detectGuiaField(snap.docs[0].data())
-    }
-
-    res.json({ guiaField: resolvedGuiaField, candidates: GUIA_CANDIDATES, docs })
+    res.json({ guiaField: GUIA_FIELD, docs })
   } catch (err) {
     console.error('[explore]', err.message)
     res.status(500).json({ error: err.message })
@@ -202,22 +194,45 @@ app.get('/api/stats', async (req, res) => {
       .where('deliveryDate', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
       .get()
 
-    if (!resolvedGuiaField && snap.docs.length > 0) {
-      resolvedGuiaField = detectGuiaField(snap.docs[0].data())
+    // "hoy" para el cálculo de guías faltantes: si es el período en curso, el
+    // momento real actual; si es un período pasado, su último día.
+    const referenceDay = formatDate(queryEnd)
+
+    const validOrderFilter = o => {
+      const status = (o.status || '').toLowerCase()
+      if (!VALID_ORDER_STATUSES.has(status)) return false
+      return o.isB2B === true || o.isB2B === undefined
     }
-    const guiaField = resolvedGuiaField || 'guiaUrl'
 
     const orders = snap.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(o => {
-        const status = (o.status || '').toLowerCase()
-        if (status.includes('cancel')) return false
-        return o.isB2B === true || o.isB2B === undefined
-      })
+      .filter(validOrderFilter)
+
+    // Segundo query, por pickUpTime dentro del mismo período: Firestore solo
+    // permite filtros de rango sobre un único campo, así que una orden cuyo
+    // recojo cae en el período pero cuya entrega está programada para un
+    // período posterior no aparece en `snap` (filtrado por deliveryDate) y su
+    // guía de recojo vencida quedaría invisible. `candidateOrders` une ambos
+    // queries (deduplicado por id) solo para armar `pendingOrders` — los
+    // agregados de cumplimiento (byDate/byLaundry) siguen usando `orders`.
+    const pickupSnap = await db.collection(ORDERS_COLLECTION)
+      .where('pickUpTime', '>=', admin.firestore.Timestamp.fromDate(firstOfPeriod))
+      .where('pickUpTime', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
+      .get()
+
+    const candidateOrdersById = new Map(orders.map(o => [o.id, o]))
+    for (const doc of pickupSnap.docs) {
+      if (candidateOrdersById.has(doc.id)) continue
+      const o = { id: doc.id, ...doc.data() }
+      if (validOrderFilter(o)) candidateOrdersById.set(doc.id, o)
+    }
+    const candidateOrders = [...candidateOrdersById.values()]
 
     // ── Collect unique laundry IDs from orders ────────────────────────────────
+    // Se usa candidateOrders (no solo orders) para que las órdenes que solo
+    // vinieron del query por pickUpTime también resuelvan su shortCode.
     const uniqueLaundryIds = [...new Set(
-      orders.map(o => o.assignmentData?.laundryId).filter(Boolean)
+      candidateOrders.map(o => o.assignmentData?.laundryId).filter(Boolean)
     )]
 
     // ── Fetch each laundry doc by ID and build shortCode lookup ───────────────
@@ -239,7 +254,7 @@ app.get('/api/stats', async (req, res) => {
 
     // ── Collect unique b2bPartner IDs and fetch names ─────────────────────────
     const uniqueB2BIds = [...new Set(
-      orders.map(o => o.b2bPartner?.id).filter(Boolean)
+      candidateOrders.map(o => o.b2bPartner?.id).filter(Boolean)
     )]
 
     const cachedB2BNames = cacheGet('b2bPartners')
@@ -267,19 +282,19 @@ app.get('/api/stats', async (req, res) => {
       const dateKey = formatDate(d)
       const lid     = order.assignmentData?.laundryId   || 'sin-asignar'
       const lname   = laundryShortNames[lid] || order.assignmentData?.laundryName || 'Sin asignar'
-      const hasGuia = hasGuiaValue(order[guiaField])
+      const { isCompliant } = guiaStatus(order, referenceDay)
 
       if (!byDate[dateKey]) byDate[dateKey] = { total: 0, withGuia: 0, laundries: new Set() }
       byDate[dateKey].total++
-      if (hasGuia) byDate[dateKey].withGuia++
+      if (isCompliant) byDate[dateKey].withGuia++
       byDate[dateKey].laundries.add(lid)
 
       if (!byLaundry[lid]) byLaundry[lid] = { id: lid, name: lname, total: 0, withGuia: 0, byDate: {} }
       byLaundry[lid].total++
-      if (hasGuia) byLaundry[lid].withGuia++
+      if (isCompliant) byLaundry[lid].withGuia++
       if (!byLaundry[lid].byDate[dateKey]) byLaundry[lid].byDate[dateKey] = { total: 0, withGuia: 0 }
       byLaundry[lid].byDate[dateKey].total++
-      if (hasGuia) byLaundry[lid].byDate[dateKey].withGuia++
+      if (isCompliant) byLaundry[lid].byDate[dateKey].withGuia++
     }
 
     // ── Daily trend ───────────────────────────────────────────────────────────
@@ -341,22 +356,25 @@ app.get('/api/stats', async (req, res) => {
     })
 
     // ── Summary ───────────────────────────────────────────────────────────────
-    const todayEntry  = byDate[today] || { total: 0, withGuia: 0, laundries: new Set() }
-    const allWithGuia = orders.filter(o => hasGuiaValue(o[guiaField])).length
-    const totalWithout = orders.length - allWithGuia
-    const overallRate  = orders.length > 0 ? Math.round((allWithGuia / orders.length) * 100) : 0
+    const todayEntry   = byDate[today] || { total: 0, withGuia: 0, laundries: new Set() }
+    const allCompliant = orders.filter(o => guiaStatus(o, referenceDay).isCompliant).length
+    const totalWithout = orders.length - allCompliant
+    const overallRate  = orders.length > 0 ? Math.round((allCompliant / orders.length) * 100) : 0
 
     // ── Pending orders ────────────────────────────────────────────────────────
-    const pendingOrders = orders
-      .filter(o => {
-        if (hasGuiaValue(o[guiaField])) return false
-        const lid   = o.assignmentData?.laundryId   || null
-        const lname = o.assignmentData?.laundryName || ''
-        if (lid   && EXCLUDED_LAUNDRY_IDS.has(lid))     return false
-        if (lname && EXCLUDED_LAUNDRY_NAMES.has(lname)) return false
-        return true
-      })
-      .map(o => ({
+    // Una orden puede aparecer hasta dos veces: una por guía de recojo faltante
+    // y otra por guía de entrega faltante (son pendientes independientes).
+    const pendingOrders = []
+    for (const o of candidateOrders) {
+      const lid   = o.assignmentData?.laundryId   || null
+      const lname = o.assignmentData?.laundryName || ''
+      if (lid   && EXCLUDED_LAUNDRY_IDS.has(lid))     continue
+      if (lname && EXCLUDED_LAUNDRY_NAMES.has(lname)) continue
+
+      const { missingPickup, missingDelivery } = guiaStatus(o, referenceDay)
+      if (!missingPickup && !missingDelivery) continue
+
+      const base = {
         id:              o.id,
         laundryName:     laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
         laundryId:       o.assignmentData?.laundryId   || null,
@@ -366,8 +384,11 @@ app.get('/api/stats', async (req, res) => {
         status:          o.status || null,
         b2bPartnerName:  b2bPartnerNames[o.b2bPartner?.id] || null,
         b2bPartnerId:    o.b2bPartner?.id || null,
-      }))
-      .sort((a, b) => new Date(a.deliveryDate || 0) - new Date(b.deliveryDate || 0))
+      }
+      if (missingPickup)   pendingOrders.push({ ...base, missingType: 'recojo' })
+      if (missingDelivery) pendingOrders.push({ ...base, missingType: 'entrega' })
+    }
+    pendingOrders.sort((a, b) => new Date(a.deliveryDate || 0) - new Date(b.deliveryDate || 0))
 
     // ── Insights ──────────────────────────────────────────────────────────────
     const projectedCompliance = Math.min(100, Math.round(overallRate))
@@ -381,7 +402,7 @@ app.get('/api/stats', async (req, res) => {
 
     const activeDaysSoFar = dailyStats.filter(d => d.total > 0).length
     const avgGuiasPerDay  = activeDaysSoFar > 0
-      ? Math.round(allWithGuia / activeDaysSoFar) : 0
+      ? Math.round(allCompliant / activeDaysSoFar) : 0
 
     const recentDays = dailyStats.slice(-6)
     const last3  = recentDays.slice(-3)
@@ -391,7 +412,7 @@ app.get('/api/stats', async (req, res) => {
     const trend = last3Avg > prev3Avg + 5 ? 'up' : last3Avg < prev3Avg - 5 ? 'down' : 'flat'
 
     const result = {
-      guiaField,
+      guiaField: GUIA_FIELD,
       mode,
       month:            mode === 'month' ? periodId : null,
       from:             mode === 'week'  ? req.query.from : null,
@@ -414,7 +435,7 @@ app.get('/api/stats', async (req, res) => {
           month:               periodId,
           mode,
           totalOrders:         orders.length,
-          totalWithGuia:       allWithGuia,
+          totalWithGuia:       allCompliant,
           totalWithout,
           overallRate,
           avgComplianceRate:   dailyStats.length > 0
