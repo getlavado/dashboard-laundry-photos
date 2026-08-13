@@ -297,6 +297,10 @@ export default function App() {
           </div>
         )}
 
+        {/* ── Pending orders (destacado, arriba del todo: es donde se ve cuántas
+             guías faltan en el rango seleccionado y a qué orden pertenecen) ── */}
+        <PendingOrdersSection orders={data?.pendingOrders ?? []} loading={loading} />
+
         {/* ── Alert banner ── */}
         {!loading && pendingProviders.length > 0 && (
           <AlertBanner providers={pendingProviders} />
@@ -338,9 +342,6 @@ export default function App() {
             : <ProviderTable providers={data?.providers ?? []} mode={viewMode} />
           }
         </div>
-
-        {/* ── Pending orders ── */}
-        <PendingOrdersSection orders={data?.pendingOrders ?? []} loading={loading} />
 
         {/* ── Charts row ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5">

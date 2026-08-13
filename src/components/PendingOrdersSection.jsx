@@ -92,15 +92,15 @@ function LaundryGroup({ group, total }) {
     <div className={`rounded-xl border overflow-hidden ${accent.border}`}>
       <button
         onClick={() => setOpen(v => !v)}
-        className={`w-full flex items-center gap-3 px-4 py-3 ${accent.bg} hover:brightness-95 transition-all text-left`}
+        className={`w-full flex items-center gap-3 px-4 sm:px-5 py-3.5 sm:py-4 ${accent.bg} hover:brightness-95 transition-all text-left`}
       >
-        <div className={`w-1 self-stretch rounded-full shrink-0 ${accent.bar}`} />
+        <div className={`w-1.5 self-stretch rounded-full shrink-0 ${accent.bar}`} />
 
         <div className="flex-1 min-w-0">
-          <p className={`text-xs font-black truncate ${accent.text}`}>{group.name}</p>
+          <p className={`text-sm font-black truncate ${accent.text}`}>{group.name}</p>
         </div>
 
-        <div className={`shrink-0 flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${accent.badge}`}>
+        <div className={`shrink-0 flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full border ${accent.badge}`}>
           {group.pickupCount > 0 && group.deliveryCount > 0 ? (
             <span title="Guías de recojo y de entrega que debe esta lavandería">
               {group.pickupCount} recojo · {group.deliveryCount} entrega
@@ -108,24 +108,24 @@ function LaundryGroup({ group, total }) {
           ) : (
             <span>{count} sin guía {group.pickupCount > 0 ? 'de recojo' : 'de entrega'}</span>
           )}
-          <span className="opacity-50">·</span>
-          <span title="Porcentaje del total de órdenes pendientes">{pct}% del pendiente</span>
+          <span className="opacity-50 hidden sm:inline">·</span>
+          <span title="Porcentaje del total de órdenes pendientes" className="hidden sm:inline">{pct}% del pendiente</span>
         </div>
 
         <button
           onClick={handleCopy}
           title="Copiar resumen"
-          className={`shrink-0 flex items-center justify-center w-6 h-6 rounded-lg transition-colors ${
+          className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
             copied
               ? 'bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400'
               : 'bg-white/60 dark:bg-gray-700/60 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
           }`}
         >
-          {copied ? <Check size={11} /> : <Copy size={11} />}
+          {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
 
         <ChevronDown
-          size={13}
+          size={16}
           className={`shrink-0 text-gray-400 dark:text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
         />
       </button>
@@ -175,42 +175,50 @@ function LaundryGroup({ group, total }) {
 /* ─── Main export ────────────────────────────────────────────────────────── */
 
 export default function PendingOrdersSection({ orders = [], loading }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
 
   if (loading || orders.length === 0) return null
 
   const groups = groupByLaundry(orders)
+  const pickupTotal   = orders.filter(o => o.missingType === 'recojo').length
+  const deliveryTotal = orders.filter(o => o.missingType === 'entrega').length
 
   return (
-    <div className="gl-card overflow-hidden">
+    <div className="gl-card overflow-hidden border-2 border-[#f6653c]/20 dark:border-[#f6653c]/30">
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full px-4 sm:px-6 pt-5 pb-4 flex items-center justify-between gap-3 hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors"
+        className="w-full px-5 sm:px-7 pt-6 pb-5 flex items-center justify-between gap-3 hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors"
       >
-        <div className="flex items-center gap-3 text-left">
-          <div className="w-8 h-8 rounded-xl bg-[#f6653c]/10 flex items-center justify-center shrink-0">
-            <AlertCircle size={15} className="text-[#d94e27]" />
+        <div className="flex items-center gap-3.5 text-left">
+          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#f6653c]/10 flex items-center justify-center shrink-0">
+            <AlertCircle size={22} className="text-[#d94e27]" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">Guías pendientes</h2>
-            <p className="text-[10px] text-gray-400 dark:text-gray-500 font-medium mt-0.5">
-              {orders.length} pendiente{orders.length !== 1 ? 's' : ''} · {groups.length} lavandería{groups.length !== 1 ? 's' : ''}
+            <h2 className="text-base sm:text-lg font-black text-gray-800 dark:text-gray-100">Guías pendientes</h2>
+            <p className="text-xs sm:text-sm text-gray-400 dark:text-gray-500 font-semibold mt-0.5 flex flex-wrap items-center gap-x-1.5">
+              <span>{orders.length} pendiente{orders.length !== 1 ? 's' : ''}</span>
+              <span className="opacity-40">·</span>
+              <span>{pickupTotal} recojo</span>
+              <span className="opacity-40">·</span>
+              <span>{deliveryTotal} entrega</span>
+              <span className="opacity-40">·</span>
+              <span>{groups.length} lavandería{groups.length !== 1 ? 's' : ''}</span>
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[10px] bg-[#f6653c]/10 text-[#d94e27] border border-[#f6653c]/20 px-2 py-1 rounded-full font-bold">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="text-sm sm:text-base bg-[#f6653c]/10 text-[#d94e27] border border-[#f6653c]/20 px-3 py-1.5 rounded-full font-black">
             {orders.length}
           </span>
           {open
-            ? <ChevronUp size={14} className="text-gray-400 dark:text-gray-500" />
-            : <ChevronDown size={14} className="text-gray-400 dark:text-gray-500" />
+            ? <ChevronUp size={18} className="text-gray-400 dark:text-gray-500" />
+            : <ChevronDown size={18} className="text-gray-400 dark:text-gray-500" />
           }
         </div>
       </button>
 
       {open && (
-        <div className="border-t border-gray-50 dark:border-gray-800 px-4 sm:px-6 py-4 space-y-2.5">
+        <div className="border-t border-gray-50 dark:border-gray-800 px-5 sm:px-7 py-5 space-y-3">
           {groups.map(g => <LaundryGroup key={g.id} group={g} total={orders.length} />)}
         </div>
       )}
