@@ -7,7 +7,7 @@
     "preview": "vite preview",
     "server": "node server.js",
     "client": "vite",
-    "explore": "node explore.js"
+    "explore": "node explore.js"    
   },
   "dependencies": {
     "cors": "^2.8.5",
