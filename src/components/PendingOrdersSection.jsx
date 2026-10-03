@@ -197,10 +197,18 @@ export default function PendingOrdersSection({ orders = [], loading }) {
             <h2 className="text-base sm:text-lg font-black text-gray-800 dark:text-gray-100">Guías pendientes</h2>
             <p className="text-xs sm:text-sm text-gray-400 dark:text-gray-500 font-semibold mt-0.5 flex flex-wrap items-center gap-x-1.5">
               <span>{orders.length} pendiente{orders.length !== 1 ? 's' : ''}</span>
-              <span className="opacity-40">·</span>
-              <span>{pickupTotal} recojo</span>
-              <span className="opacity-40">·</span>
-              <span>{deliveryTotal} entrega</span>
+              {pickupTotal > 0 && (
+                <>
+                  <span className="opacity-40">·</span>
+                  <span>{pickupTotal} recojo</span>
+                </>
+              )}
+              {deliveryTotal > 0 && (
+                <>
+                  <span className="opacity-40">·</span>
+                  <span>{deliveryTotal} entrega</span>
+                </>
+              )}
               <span className="opacity-40">·</span>
               <span>{groups.length} lavandería{groups.length !== 1 ? 's' : ''}</span>
             </p>

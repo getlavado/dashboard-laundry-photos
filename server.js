@@ -51,9 +51,16 @@ const B2B_PARTNERS_COLLECTION = 'b2bPartners'
 const EXCLUDED_LAUNDRY_IDS   = new Set(['qBNRz2giHEVlWZBrWbCy'])
 const EXCLUDED_LAUNDRY_NAMES = new Set(['Lavanderia John Doe', 'Lavandería John Doe'])
 
-// Cada orden debe acumular 2 comprobantes en este array al llegar a "delivered":
-// el primero es la guía de recojo, el segundo la de entrega.
+// Cada orden puede acumular comprobantes en este array: el primero es la guía
+// de recojo, el segundo (si se sube) la de entrega.
 const GUIA_FIELD = 'laundryInvoices'
+
+// Solo se contabiliza la GUÍA DE RECOJO para el cumplimiento, no la de entrega.
+// Las lavanderías suben normalmente una sola guía ya con ambas firmas, por lo
+// que exigir una segunda guía de entrega marcaba casi todo como pendiente y
+// ocultaba la información real. Poner en `true` para volver a exigir ambas
+// (modo "separar recojo / entrega").
+const COUNT_DELIVERY_GUIDE = false
 
 // En minúsculas porque siempre se compara contra status.toLowerCase() — cualquier
 // entrada aquí con una mayúscula (ej. 'pickedUp') nunca haría match y excluiría
@@ -87,7 +94,8 @@ function guiaStatus(order, referenceDay) {
   const delivery = toDate(order.deliveryDate)
 
   const missingPickup   = !!pickup   && formatDate(pickup)   < referenceDay && count < 1
-  const missingDelivery = !!delivery && formatDate(delivery) < referenceDay && count < 2
+  const missingDelivery = COUNT_DELIVERY_GUIDE
+    && !!delivery && formatDate(delivery) < referenceDay && count < 2
 
   return { missingPickup, missingDelivery, isCompliant: !missingPickup && !missingDelivery }
 }
