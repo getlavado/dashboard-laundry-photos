@@ -135,302 +135,402 @@ app.get('/api/explore', async (req, res) => {
  * GET /api/stats?month=YYYY-MM          — month mode (default)
  * GET /api/stats?from=YYYY-MM-DD&to=YYYY-MM-DD — week/custom range mode
  */
+async function computeStats(query) {
+  const now     = new Date()
+  const todayStr = formatDate(now)
+
+  // ── Resolve period ────────────────────────────────────────────────────────
+  let firstOfPeriod, lastOfPeriod, isCurrentPeriod, cacheKey
+  let daysInPeriod, dayOfPeriod, mode, periodId
+
+  if (query.from && query.to) {
+    // Week / custom range mode
+    mode          = 'week'
+    firstOfPeriod = new Date(query.from + 'T00:00:00.000')
+    lastOfPeriod  = new Date(query.to   + 'T23:59:59.999')
+    isCurrentPeriod = query.to >= todayStr
+    cacheKey      = `stats_${query.from}_${query.to}`
+    periodId      = `${query.from}:${query.to}`
+    daysInPeriod  = 7
+
+    if (isCurrentPeriod) {
+      const msElapsed = Math.max(0, now - firstOfPeriod)
+      dayOfPeriod = Math.min(7, Math.floor(msElapsed / (1000 * 60 * 60 * 24)) + 1)
+    } else {
+      dayOfPeriod = 7
+    }
+  } else {
+    // Month mode
+    mode = 'month'
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const monthParam = (query.month || currentMonthStr).slice(0, 7)
+    const [yearStr, monthStr] = monthParam.split('-')
+    const year  = parseInt(yearStr)
+    const month = parseInt(monthStr)
+
+    firstOfPeriod   = new Date(year, month - 1, 1, 0, 0, 0, 0)
+    lastOfPeriod    = new Date(year, month, 0, 23, 59, 59, 999)
+    isCurrentPeriod = monthParam === currentMonthStr
+    cacheKey        = `stats_${monthParam}`
+    periodId        = monthParam
+    daysInPeriod    = new Date(year, month, 0).getDate()
+    dayOfPeriod     = isCurrentPeriod ? now.getDate() : daysInPeriod
+  }
+
+  const cached = cacheGet(cacheKey)
+  if (cached) return cached
+
+  const queryEnd = isCurrentPeriod ? now : lastOfPeriod
+
+  // ── Firestore query ───────────────────────────────────────────────────────
+  // Órdenes cuyo RECOJO cae en el período.
+  const snap = await db.collection(ORDERS_COLLECTION)
+    .where('pickUpTime', '>=', admin.firestore.Timestamp.fromDate(firstOfPeriod))
+    .where('pickUpTime', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
+    .get()
+
+  // "hoy" para el cálculo de guías faltantes: si es el período en curso, el
+  // momento real actual; si es un período pasado, su último día.
+  const referenceDay = formatDate(queryEnd)
+
+  const orders = snap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(o => {
+      const status = (o.status || '').toLowerCase()
+      if (!VALID_ORDER_STATUSES.has(status)) return false
+      return o.isB2B === true || o.isB2B === undefined
+    })
+
+  // ── Collect unique laundry IDs from orders ────────────────────────────────
+  const uniqueLaundryIds = [...new Set(
+    orders.map(o => o.assignmentData?.laundryId).filter(Boolean)
+  )]
+
+  // ── Fetch each laundry doc by ID and build shortCode lookup ───────────────
+  const cachedNames = cacheGet('laundries')
+  let laundryShortNames = cachedNames || {}
+
+  if (!cachedNames) {
+    const fetches = await Promise.all(
+      uniqueLaundryIds.map(id => db.collection(LAUNDRIES_COLLECTION).doc(id).get())
+    )
+    for (const doc of fetches) {
+      if (doc.exists) {
+        const d = doc.data()
+        laundryShortNames[doc.id] = d.shortCode || d.name || null
+      }
+    }
+    cacheSet('laundries', laundryShortNames)
+  }
+
+  // ── Collect unique b2bPartner IDs and fetch names ─────────────────────────
+  const uniqueB2BIds = [...new Set(
+    orders.map(o => o.b2bPartner?.id).filter(Boolean)
+  )]
+
+  const cachedB2BNames = cacheGet('b2bPartners')
+  let b2bPartnerNames = cachedB2BNames || {}
+
+  if (!cachedB2BNames && uniqueB2BIds.length > 0) {
+    const b2bFetches = await Promise.all(
+      uniqueB2BIds.map(id => db.collection(B2B_PARTNERS_COLLECTION).doc(id).get())
+    )
+    for (const doc of b2bFetches) {
+      if (doc.exists) {
+        b2bPartnerNames[doc.id] = doc.data().name || null
+      }
+    }
+    cacheSet('b2bPartners', b2bPartnerNames)
+  }
+
+  // ── Aggregate ─────────────────────────────────────────────────────────────
+  const byDate    = {}
+  const byLaundry = {}
+
+  for (const order of orders) {
+    const d = toDate(order.pickUpTime)
+    if (!d) continue
+    const dateKey = formatDate(d)
+    const lid     = order.assignmentData?.laundryId   || 'sin-asignar'
+    const lname   = laundryShortNames[lid] || order.assignmentData?.laundryName || 'Sin asignar'
+    const { isCompliant } = guiaStatus(order, referenceDay)
+
+    if (!byDate[dateKey]) byDate[dateKey] = { total: 0, withGuia: 0, laundries: new Set() }
+    byDate[dateKey].total++
+    if (isCompliant) byDate[dateKey].withGuia++
+    byDate[dateKey].laundries.add(lid)
+
+    if (!byLaundry[lid]) byLaundry[lid] = { id: lid, name: lname, total: 0, withGuia: 0, byDate: {} }
+    byLaundry[lid].total++
+    if (isCompliant) byLaundry[lid].withGuia++
+    if (!byLaundry[lid].byDate[dateKey]) byLaundry[lid].byDate[dateKey] = { total: 0, withGuia: 0 }
+    byLaundry[lid].byDate[dateKey].total++
+    if (isCompliant) byLaundry[lid].byDate[dateKey].withGuia++
+  }
+
+  // ── Daily trend ───────────────────────────────────────────────────────────
+  const dailyStats = []
+  const cursor = new Date(firstOfPeriod)
+  while (cursor <= queryEnd) {
+    const key   = formatDate(cursor)
+    const entry = byDate[key] || { total: 0, withGuia: 0, laundries: new Set() }
+    dailyStats.push({
+      date:            key,
+      label:           new Date(cursor).toLocaleDateString('es-PE', { weekday: 'short', month: 'short', day: 'numeric' }),
+      total:           entry.total,
+      withGuia:        entry.withGuia,
+      sinGuia:         entry.total - entry.withGuia,
+      complianceRate:  entry.total > 0 ? Math.round((entry.withGuia / entry.total) * 100) : 0,
+      activeProviders: entry.laundries instanceof Set ? entry.laundries.size : 0,
+    })
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  // ── Per-provider table ────────────────────────────────────────────────────
+  const today = todayStr
+  const providers = Object.values(byLaundry).map(l => {
+    const t = l.byDate[today] || { total: 0, withGuia: 0 }
+
+    const activeDays = dailyStats.filter(d => l.byDate[d.date])
+    const periodAvg  = activeDays.length > 0
+      ? Math.round(activeDays.reduce((sum, d) => {
+          const ld = l.byDate[d.date] || { total: 0, withGuia: 0 }
+          return sum + (ld.total > 0 ? (ld.withGuia / ld.total) * 100 : 0)
+        }, 0) / activeDays.length)
+      : 0
+
+    // For current period: use today's data for status
+    // For past periods: use full-period totals (more useful than always showing 'sin-ordenes')
+    const statusRef = isCurrentPeriod ? t : { total: l.total, withGuia: l.withGuia }
+    const status =
+      statusRef.total === 0        ? 'sin-ordenes'
+      : statusRef.withGuia === statusRef.total ? 'al-dia'
+      : statusRef.withGuia > 0     ? 'parcial'
+      : 'pendiente'
+
+    return {
+      id:              l.id,
+      name:            l.name,
+      todayOrders:     t.total,
+      todayWithGuia:   t.withGuia,
+      todayCompliance: t.total > 0 ? Math.round((t.withGuia / t.total) * 100) : 0,
+      weeklyCompliance: periodAvg,
+      totalOrders:     l.total,
+      totalWithGuia:   l.withGuia,
+      status,
+    }
+  }).filter(p =>
+    !EXCLUDED_LAUNDRY_IDS.has(p.id) && !EXCLUDED_LAUNDRY_NAMES.has(p.name)
+  ).sort((a, b) => {
+    const order = { 'pendiente': 0, 'parcial': 1, 'al-dia': 2, 'sin-ordenes': 3 }
+    return (order[a.status] ?? 4) - (order[b.status] ?? 4)
+  })
+
+  // ── Summary ───────────────────────────────────────────────────────────────
+  const todayEntry   = byDate[today] || { total: 0, withGuia: 0, laundries: new Set() }
+  const allCompliant = orders.filter(o => guiaStatus(o, referenceDay).isCompliant).length
+  const totalWithout = orders.length - allCompliant
+  const overallRate  = orders.length > 0 ? Math.round((allCompliant / orders.length) * 100) : 0
+
+  // ── Pending orders ────────────────────────────────────────────────────────
+  const pendingOrders = []
+  for (const o of orders) {
+    const lid   = o.assignmentData?.laundryId   || null
+    const lname = o.assignmentData?.laundryName || ''
+    if (lid   && EXCLUDED_LAUNDRY_IDS.has(lid))     continue
+    if (lname && EXCLUDED_LAUNDRY_NAMES.has(lname)) continue
+
+    if (!guiaStatus(o, referenceDay).missingPickup) continue
+
+    pendingOrders.push({
+      id:              o.id,
+      laundryName:     laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
+      laundryId:       o.assignmentData?.laundryId   || null,
+      pickUpTime:      toDate(o.pickUpTime)?.toISOString()    || null,
+      deliveryDate:    toDate(o.deliveryDate)?.toISOString() || null,
+      createdAt:       toDate(o.createdAt)?.toISOString()    || null,
+      status:          o.status || null,
+      b2bPartnerName:  b2bPartnerNames[o.b2bPartner?.id] || null,
+      b2bPartnerId:    o.b2bPartner?.id || null,
+      missingType:     'recojo',
+    })
+  }
+  pendingOrders.sort((a, b) => new Date(a.pickUpTime || 0) - new Date(b.pickUpTime || 0))
+
+  // ── Insights ──────────────────────────────────────────────────────────────
+  const projectedCompliance = Math.min(100, Math.round(overallRate))
+
+  const activeProviders = providers.filter(p => p.totalOrders > 0)
+  const worstProvider   = activeProviders
+    .filter(p => p.totalOrders >= 3)
+    .sort((a, b) => a.weeklyCompliance - b.weeklyCompliance)[0] || null
+  const bestProvider    = activeProviders
+    .sort((a, b) => b.weeklyCompliance - a.weeklyCompliance)[0] || null
+
+  const activeDaysSoFar = dailyStats.filter(d => d.total > 0).length
+  const avgGuiasPerDay  = activeDaysSoFar > 0
+    ? Math.round(allCompliant / activeDaysSoFar) : 0
+
+  const recentDays = dailyStats.slice(-6)
+  const last3  = recentDays.slice(-3)
+  const prev3  = recentDays.slice(0, 3)
+  const last3Avg = last3.filter(d => d.total > 0).reduce((s, d) => s + d.complianceRate, 0) / (last3.filter(d => d.total > 0).length || 1)
+  const prev3Avg = prev3.filter(d => d.total > 0).reduce((s, d) => s + d.complianceRate, 0) / (prev3.filter(d => d.total > 0).length || 1)
+  const trend = last3Avg > prev3Avg + 5 ? 'up' : last3Avg < prev3Avg - 5 ? 'down' : 'flat'
+
+  const result = {
+    guiaField: GUIA_FIELD,
+    mode,
+    month:            mode === 'month' ? periodId : null,
+    from:             mode === 'week'  ? query.from : null,
+    to:               mode === 'week'  ? query.to   : null,
+    isCurrentMonth:   isCurrentPeriod,
+    isCurrentPeriod,
+    summary: {
+      today: {
+        date:               today,
+        totalOrders:        todayEntry.total,
+        ordersWithGuia:     todayEntry.withGuia,
+        ordersWithout:      todayEntry.total - todayEntry.withGuia,
+        complianceRate:     todayEntry.total > 0
+          ? Math.round((todayEntry.withGuia / todayEntry.total) * 100) : 0,
+        activeProviders:    todayEntry.laundries instanceof Set ? todayEntry.laundries.size : 0,
+        compliantProviders: providers.filter(p => p.status === 'al-dia').length,
+        pendingProviders:   providers.filter(p => p.status === 'pendiente' || p.status === 'parcial').length,
+      },
+      period: {
+        month:               periodId,
+        mode,
+        totalOrders:         orders.length,
+        totalWithGuia:       allCompliant,
+        totalWithout,
+        overallRate,
+        avgComplianceRate:   dailyStats.length > 0
+          ? Math.round(dailyStats.reduce((s, d) => s + d.complianceRate, 0) / dailyStats.length) : 0,
+        totalProviders:      providers.length,
+        daysInMonth:         daysInPeriod,
+        dayOfMonth:          dayOfPeriod,
+        projectedCompliance,
+        avgGuiasPerDay,
+        trend,
+        worstProvider: worstProvider
+          ? { name: worstProvider.name, compliance: worstProvider.weeklyCompliance, pending: worstProvider.totalOrders - worstProvider.totalWithGuia }
+          : null,
+        bestProvider: bestProvider
+          ? { name: bestProvider.name, compliance: bestProvider.weeklyCompliance }
+          : null,
+      },
+    },
+    dailyStats,
+    providers,
+    pendingOrders,
+  }
+  cacheSet(cacheKey, result)
+  return result
+}
+
 app.get('/api/stats', async (req, res) => {
   if (!db) return res.status(500).json({ error: `Firebase not initialized: ${firebaseInitError}` })
   try {
-    const now     = new Date()
-    const todayStr = formatDate(now)
-
-    // ── Resolve period ────────────────────────────────────────────────────────
-    let firstOfPeriod, lastOfPeriod, isCurrentPeriod, cacheKey
-    let daysInPeriod, dayOfPeriod, mode, periodId
-
-    if (req.query.from && req.query.to) {
-      // Week / custom range mode
-      mode          = 'week'
-      firstOfPeriod = new Date(req.query.from + 'T00:00:00.000')
-      lastOfPeriod  = new Date(req.query.to   + 'T23:59:59.999')
-      isCurrentPeriod = req.query.to >= todayStr
-      cacheKey      = `stats_${req.query.from}_${req.query.to}`
-      periodId      = `${req.query.from}:${req.query.to}`
-      daysInPeriod  = 7
-
-      if (isCurrentPeriod) {
-        const msElapsed = Math.max(0, now - firstOfPeriod)
-        dayOfPeriod = Math.min(7, Math.floor(msElapsed / (1000 * 60 * 60 * 24)) + 1)
-      } else {
-        dayOfPeriod = 7
-      }
-    } else {
-      // Month mode
-      mode = 'month'
-      const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-      const monthParam = (req.query.month || currentMonthStr).slice(0, 7)
-      const [yearStr, monthStr] = monthParam.split('-')
-      const year  = parseInt(yearStr)
-      const month = parseInt(monthStr)
-
-      firstOfPeriod   = new Date(year, month - 1, 1, 0, 0, 0, 0)
-      lastOfPeriod    = new Date(year, month, 0, 23, 59, 59, 999)
-      isCurrentPeriod = monthParam === currentMonthStr
-      cacheKey        = `stats_${monthParam}`
-      periodId        = monthParam
-      daysInPeriod    = new Date(year, month, 0).getDate()
-      dayOfPeriod     = isCurrentPeriod ? now.getDate() : daysInPeriod
-    }
-
-    const cached = cacheGet(cacheKey)
-    if (cached) return res.json(cached)
-
-    const queryEnd = isCurrentPeriod ? now : lastOfPeriod
-
-    // ── Firestore query ───────────────────────────────────────────────────────
-    // Órdenes cuyo RECOJO cae en el período.
-    const snap = await db.collection(ORDERS_COLLECTION)
-      .where('pickUpTime', '>=', admin.firestore.Timestamp.fromDate(firstOfPeriod))
-      .where('pickUpTime', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
-      .get()
-
-    // "hoy" para el cálculo de guías faltantes: si es el período en curso, el
-    // momento real actual; si es un período pasado, su último día.
-    const referenceDay = formatDate(queryEnd)
-
-    const orders = snap.docs
-      .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(o => {
-        const status = (o.status || '').toLowerCase()
-        if (!VALID_ORDER_STATUSES.has(status)) return false
-        return o.isB2B === true || o.isB2B === undefined
-      })
-
-    // ── Collect unique laundry IDs from orders ────────────────────────────────
-    const uniqueLaundryIds = [...new Set(
-      orders.map(o => o.assignmentData?.laundryId).filter(Boolean)
-    )]
-
-    // ── Fetch each laundry doc by ID and build shortCode lookup ───────────────
-    const cachedNames = cacheGet('laundries')
-    let laundryShortNames = cachedNames || {}
-
-    if (!cachedNames) {
-      const fetches = await Promise.all(
-        uniqueLaundryIds.map(id => db.collection(LAUNDRIES_COLLECTION).doc(id).get())
-      )
-      for (const doc of fetches) {
-        if (doc.exists) {
-          const d = doc.data()
-          laundryShortNames[doc.id] = d.shortCode || d.name || null
-        }
-      }
-      cacheSet('laundries', laundryShortNames)
-    }
-
-    // ── Collect unique b2bPartner IDs and fetch names ─────────────────────────
-    const uniqueB2BIds = [...new Set(
-      orders.map(o => o.b2bPartner?.id).filter(Boolean)
-    )]
-
-    const cachedB2BNames = cacheGet('b2bPartners')
-    let b2bPartnerNames = cachedB2BNames || {}
-
-    if (!cachedB2BNames && uniqueB2BIds.length > 0) {
-      const b2bFetches = await Promise.all(
-        uniqueB2BIds.map(id => db.collection(B2B_PARTNERS_COLLECTION).doc(id).get())
-      )
-      for (const doc of b2bFetches) {
-        if (doc.exists) {
-          b2bPartnerNames[doc.id] = doc.data().name || null
-        }
-      }
-      cacheSet('b2bPartners', b2bPartnerNames)
-    }
-
-    // ── Aggregate ─────────────────────────────────────────────────────────────
-    const byDate    = {}
-    const byLaundry = {}
-
-    for (const order of orders) {
-      const d = toDate(order.pickUpTime)
-      if (!d) continue
-      const dateKey = formatDate(d)
-      const lid     = order.assignmentData?.laundryId   || 'sin-asignar'
-      const lname   = laundryShortNames[lid] || order.assignmentData?.laundryName || 'Sin asignar'
-      const { isCompliant } = guiaStatus(order, referenceDay)
-
-      if (!byDate[dateKey]) byDate[dateKey] = { total: 0, withGuia: 0, laundries: new Set() }
-      byDate[dateKey].total++
-      if (isCompliant) byDate[dateKey].withGuia++
-      byDate[dateKey].laundries.add(lid)
-
-      if (!byLaundry[lid]) byLaundry[lid] = { id: lid, name: lname, total: 0, withGuia: 0, byDate: {} }
-      byLaundry[lid].total++
-      if (isCompliant) byLaundry[lid].withGuia++
-      if (!byLaundry[lid].byDate[dateKey]) byLaundry[lid].byDate[dateKey] = { total: 0, withGuia: 0 }
-      byLaundry[lid].byDate[dateKey].total++
-      if (isCompliant) byLaundry[lid].byDate[dateKey].withGuia++
-    }
-
-    // ── Daily trend ───────────────────────────────────────────────────────────
-    const dailyStats = []
-    const cursor = new Date(firstOfPeriod)
-    while (cursor <= queryEnd) {
-      const key   = formatDate(cursor)
-      const entry = byDate[key] || { total: 0, withGuia: 0, laundries: new Set() }
-      dailyStats.push({
-        date:            key,
-        label:           new Date(cursor).toLocaleDateString('es-PE', { weekday: 'short', month: 'short', day: 'numeric' }),
-        total:           entry.total,
-        withGuia:        entry.withGuia,
-        sinGuia:         entry.total - entry.withGuia,
-        complianceRate:  entry.total > 0 ? Math.round((entry.withGuia / entry.total) * 100) : 0,
-        activeProviders: entry.laundries instanceof Set ? entry.laundries.size : 0,
-      })
-      cursor.setDate(cursor.getDate() + 1)
-    }
-
-    // ── Per-provider table ────────────────────────────────────────────────────
-    const today = todayStr
-    const providers = Object.values(byLaundry).map(l => {
-      const t = l.byDate[today] || { total: 0, withGuia: 0 }
-
-      const activeDays = dailyStats.filter(d => l.byDate[d.date])
-      const periodAvg  = activeDays.length > 0
-        ? Math.round(activeDays.reduce((sum, d) => {
-            const ld = l.byDate[d.date] || { total: 0, withGuia: 0 }
-            return sum + (ld.total > 0 ? (ld.withGuia / ld.total) * 100 : 0)
-          }, 0) / activeDays.length)
-        : 0
-
-      // For current period: use today's data for status
-      // For past periods: use full-period totals (more useful than always showing 'sin-ordenes')
-      const statusRef = isCurrentPeriod ? t : { total: l.total, withGuia: l.withGuia }
-      const status =
-        statusRef.total === 0        ? 'sin-ordenes'
-        : statusRef.withGuia === statusRef.total ? 'al-dia'
-        : statusRef.withGuia > 0     ? 'parcial'
-        : 'pendiente'
-
-      return {
-        id:              l.id,
-        name:            l.name,
-        todayOrders:     t.total,
-        todayWithGuia:   t.withGuia,
-        todayCompliance: t.total > 0 ? Math.round((t.withGuia / t.total) * 100) : 0,
-        weeklyCompliance: periodAvg,
-        totalOrders:     l.total,
-        totalWithGuia:   l.withGuia,
-        status,
-      }
-    }).filter(p =>
-      !EXCLUDED_LAUNDRY_IDS.has(p.id) && !EXCLUDED_LAUNDRY_NAMES.has(p.name)
-    ).sort((a, b) => {
-      const order = { 'pendiente': 0, 'parcial': 1, 'al-dia': 2, 'sin-ordenes': 3 }
-      return (order[a.status] ?? 4) - (order[b.status] ?? 4)
-    })
-
-    // ── Summary ───────────────────────────────────────────────────────────────
-    const todayEntry   = byDate[today] || { total: 0, withGuia: 0, laundries: new Set() }
-    const allCompliant = orders.filter(o => guiaStatus(o, referenceDay).isCompliant).length
-    const totalWithout = orders.length - allCompliant
-    const overallRate  = orders.length > 0 ? Math.round((allCompliant / orders.length) * 100) : 0
-
-    // ── Pending orders ────────────────────────────────────────────────────────
-    const pendingOrders = []
-    for (const o of orders) {
-      const lid   = o.assignmentData?.laundryId   || null
-      const lname = o.assignmentData?.laundryName || ''
-      if (lid   && EXCLUDED_LAUNDRY_IDS.has(lid))     continue
-      if (lname && EXCLUDED_LAUNDRY_NAMES.has(lname)) continue
-
-      if (!guiaStatus(o, referenceDay).missingPickup) continue
-
-      pendingOrders.push({
-        id:              o.id,
-        laundryName:     laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
-        laundryId:       o.assignmentData?.laundryId   || null,
-        pickUpTime:      toDate(o.pickUpTime)?.toISOString()    || null,
-        deliveryDate:    toDate(o.deliveryDate)?.toISOString() || null,
-        createdAt:       toDate(o.createdAt)?.toISOString()    || null,
-        status:          o.status || null,
-        b2bPartnerName:  b2bPartnerNames[o.b2bPartner?.id] || null,
-        b2bPartnerId:    o.b2bPartner?.id || null,
-        missingType:     'recojo',
-      })
-    }
-    pendingOrders.sort((a, b) => new Date(a.pickUpTime || 0) - new Date(b.pickUpTime || 0))
-
-    // ── Insights ──────────────────────────────────────────────────────────────
-    const projectedCompliance = Math.min(100, Math.round(overallRate))
-
-    const activeProviders = providers.filter(p => p.totalOrders > 0)
-    const worstProvider   = activeProviders
-      .filter(p => p.totalOrders >= 3)
-      .sort((a, b) => a.weeklyCompliance - b.weeklyCompliance)[0] || null
-    const bestProvider    = activeProviders
-      .sort((a, b) => b.weeklyCompliance - a.weeklyCompliance)[0] || null
-
-    const activeDaysSoFar = dailyStats.filter(d => d.total > 0).length
-    const avgGuiasPerDay  = activeDaysSoFar > 0
-      ? Math.round(allCompliant / activeDaysSoFar) : 0
-
-    const recentDays = dailyStats.slice(-6)
-    const last3  = recentDays.slice(-3)
-    const prev3  = recentDays.slice(0, 3)
-    const last3Avg = last3.filter(d => d.total > 0).reduce((s, d) => s + d.complianceRate, 0) / (last3.filter(d => d.total > 0).length || 1)
-    const prev3Avg = prev3.filter(d => d.total > 0).reduce((s, d) => s + d.complianceRate, 0) / (prev3.filter(d => d.total > 0).length || 1)
-    const trend = last3Avg > prev3Avg + 5 ? 'up' : last3Avg < prev3Avg - 5 ? 'down' : 'flat'
-
-    const result = {
-      guiaField: GUIA_FIELD,
-      mode,
-      month:            mode === 'month' ? periodId : null,
-      from:             mode === 'week'  ? req.query.from : null,
-      to:               mode === 'week'  ? req.query.to   : null,
-      isCurrentMonth:   isCurrentPeriod,
-      isCurrentPeriod,
-      summary: {
-        today: {
-          date:               today,
-          totalOrders:        todayEntry.total,
-          ordersWithGuia:     todayEntry.withGuia,
-          ordersWithout:      todayEntry.total - todayEntry.withGuia,
-          complianceRate:     todayEntry.total > 0
-            ? Math.round((todayEntry.withGuia / todayEntry.total) * 100) : 0,
-          activeProviders:    todayEntry.laundries instanceof Set ? todayEntry.laundries.size : 0,
-          compliantProviders: providers.filter(p => p.status === 'al-dia').length,
-          pendingProviders:   providers.filter(p => p.status === 'pendiente' || p.status === 'parcial').length,
-        },
-        period: {
-          month:               periodId,
-          mode,
-          totalOrders:         orders.length,
-          totalWithGuia:       allCompliant,
-          totalWithout,
-          overallRate,
-          avgComplianceRate:   dailyStats.length > 0
-            ? Math.round(dailyStats.reduce((s, d) => s + d.complianceRate, 0) / dailyStats.length) : 0,
-          totalProviders:      providers.length,
-          daysInMonth:         daysInPeriod,
-          dayOfMonth:          dayOfPeriod,
-          projectedCompliance,
-          avgGuiasPerDay,
-          trend,
-          worstProvider: worstProvider
-            ? { name: worstProvider.name, compliance: worstProvider.weeklyCompliance, pending: worstProvider.totalOrders - worstProvider.totalWithGuia }
-            : null,
-          bestProvider: bestProvider
-            ? { name: bestProvider.name, compliance: bestProvider.weeklyCompliance }
-            : null,
-        },
-      },
-      dailyStats,
-      providers,
-      pendingOrders,
-    }
-    cacheSet(cacheKey, result)
-    res.json(result)
+    res.json(await computeStats(req.query))
   } catch (err) {
     console.error('[stats]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Resumen diario a Slack ──────────────────────────────────────────────────
+// Vercel Cron llama a este endpoint lun–sáb 9:00 am Lima (ver vercel.json).
+//   · Lunes: se envía siempre (aunque todo esté al día).
+//   · Mar–sáb: solo si hay atraso (🟡 o 🔴).
+// Env: SLACK_WEBHOOK_URL (obligatorio), SLACK_MENTION (ej. "<@U0123ABC>",
+// se etiqueta cuando hay atraso), CRON_SECRET (lo envía Vercel Cron).
+// ?dry=1 devuelve el mensaje sin enviarlo · ?force=1 envía aunque no toque.
+const DASHBOARD_URL = 'https://guias-b2b-nine.vercel.app'
+const TZ = 'America/Lima'
+
+// Fecha calendario (YYYY-MM-DD) en hora de Lima.
+function limaDay(date) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(date)
+}
+
+// Días de retraso: días calendario (Lima) entre el recojo y hoy.
+function delayDays(iso, todayLima) {
+  if (!iso) return 0
+  return Math.round((new Date(todayLima) - new Date(limaDay(new Date(iso)))) / 86400000)
+}
+
+function buildSlackSummary(pendingOrders, now) {
+  const today  = limaDay(now)
+  const orders = pendingOrders.map(o => ({ ...o, delay: delayDays(o.pickUpTime, today) }))
+
+  const byPlant = {}
+  for (const o of orders) {
+    const key = o.laundryId || o.laundryName
+    if (!byPlant[key]) byPlant[key] = { name: o.laundryName, count: 0, maxDelay: 0 }
+    byPlant[key].count++
+    byPlant[key].maxDelay = Math.max(byPlant[key].maxDelay, o.delay)
+  }
+  const plants = Object.values(byPlant)
+    .sort((a, b) => b.maxDelay - a.maxDelay || b.count - a.count)
+
+  // Misma regla que el semáforo del dashboard (StatusHero).
+  const maxDelay = Math.max(0, ...orders.map(o => o.delay))
+  const level    = maxDelay >= 3 ? 'mal' : maxDelay === 2 ? 'medio' : 'bien'
+  const header   = { mal: '🔴 *Guías B2B: vamos mal*', medio: '🟡 *Guías B2B: más o menos*', bien: '🟢 *Guías B2B: vamos bien*' }[level]
+
+  const lines = [header]
+  if (orders.length === 0) {
+    lines.push('Todas las plantas subieron sus guías de recojo.')
+  } else {
+    lines.push(`${orders.length} guía${orders.length !== 1 ? 's' : ''} de recojo sin subir · ${plants.length} planta${plants.length !== 1 ? 's' : ''}`)
+    const top = plants.slice(0, 8)
+    for (const p of top) {
+      lines.push(`• *${p.name}*: ${p.count} guía${p.count !== 1 ? 's' : ''} · ${p.maxDelay} día${p.maxDelay !== 1 ? 's' : ''}${p.maxDelay >= 3 ? ' ⚠️' : ''}`)
+    }
+    if (plants.length > top.length) lines.push(`…y ${plants.length - top.length} más`)
+  }
+  if (level !== 'bien' && process.env.SLACK_MENTION) {
+    lines.push(`${process.env.SLACK_MENTION} ¿nos ayudas a mover a estas plantas? 🙏`)
+  }
+  lines.push(`👉 ${DASHBOARD_URL}`)
+
+  return { level, text: lines.join('\n') }
+}
+
+app.get('/api/slack-summary', async (req, res) => {
+  const secret = process.env.CRON_SECRET
+  const dry    = req.query.dry === '1'
+  if (!dry && secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+  if (!db) return res.status(500).json({ error: `Firebase not initialized: ${firebaseInitError}` })
+
+  try {
+    // Ventana de 30 días: cubre guías atrasadas aunque el recojo haya sido el
+    // mes anterior (ej. el 1ro del mes).
+    const now  = new Date()
+    const from = new Date(now.getTime() - 29 * 86400000)
+    const stats = await computeStats({ from: limaDay(from), to: limaDay(now) })
+
+    const { level, text } = buildSlackSummary(stats.pendingOrders, now)
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(now)
+    const shouldSend = req.query.force === '1' || weekday === 'Mon' || level !== 'bien'
+
+    if (dry || !shouldSend) return res.json({ sent: false, weekday, level, text })
+
+    const webhook = process.env.SLACK_WEBHOOK_URL
+    if (!webhook) return res.status(500).json({ error: 'SLACK_WEBHOOK_URL is not set', text })
+
+    const r = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    if (!r.ok) throw new Error(`Slack respondió ${r.status}: ${await r.text()}`)
+    res.json({ sent: true, weekday, level, text })
+  } catch (err) {
+    console.error('[slack-summary]', err.message)
     res.status(500).json({ error: err.message })
   }
 })
