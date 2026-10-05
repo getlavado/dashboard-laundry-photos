@@ -509,7 +509,9 @@ function buildSlackSummary(pendingOrders, now, weekly) {
 
   const top = plants.slice(0, 8)
   for (const p of top) {
-    lines.push(`• *${p.name}*: ${p.count} guía${p.count !== 1 ? 's' : ''} · ${p.maxDelay} día${p.maxDelay !== 1 ? 's' : ''}${p.maxDelay >= 3 ? ' ⚠️' : ''}`)
+    const debe = `debe ${p.count} guía${p.count !== 1 ? 's' : ''}`
+    const vieja = `${p.count > 1 ? 'la más antigua lleva' : 'lleva'} ${p.maxDelay} día${p.maxDelay !== 1 ? 's' : ''} de atraso`
+    lines.push(`• *${p.name}*: ${debe} · ${vieja}${p.maxDelay >= 3 ? ' ⚠️' : ''}`)
   }
   if (plants.length > top.length) lines.push(`…y ${plants.length - top.length} más`)
 
