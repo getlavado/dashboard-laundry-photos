@@ -1,5 +1,6 @@
-// Días de retraso = días calendario desde el recojo hasta hoy. Una orden solo
-// figura como pendiente si su recojo fue antes de hoy, así que el mínimo es 1.
+// Días de retraso = días calendario desde `dueFrom` (el recojo, o la creación
+// de la orden si se cargó tarde — lo calcula el server) hasta hoy. Una orden
+// solo figura como pendiente si esa fecha es anterior a hoy: el mínimo es 1.
 export function delayDays(iso) {
   if (!iso) return 0
   const d = new Date(iso)

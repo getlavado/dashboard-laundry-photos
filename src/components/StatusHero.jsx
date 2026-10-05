@@ -23,7 +23,7 @@ const VERDICTS = {
 }
 
 export default function StatusHero({ pendingOrders = [], complianceRate }) {
-  const delays   = pendingOrders.map(o => delayDays(o.pickUpTime))
+  const delays   = pendingOrders.map(o => delayDays(o.dueFrom))
   const grave    = delays.filter(d => d >= 3).length
   const maxDelay = Math.max(0, ...delays)
   const plants   = new Set(pendingOrders.map(o => o.laundryId || o.laundryName)).size
@@ -32,7 +32,7 @@ export default function StatusHero({ pendingOrders = [], complianceRate }) {
   const v   = VERDICTS[key]
 
   const worst = pendingOrders
-    .filter(o => delayDays(o.pickUpTime) === maxDelay)
+    .filter(o => delayDays(o.dueFrom) === maxDelay)
     .reduce((acc, o) => { acc[o.laundryName] = (acc[o.laundryName] || 0) + 1; return acc }, {})
   const worstNames = Object.entries(worst).sort((a, b) => b[1] - a[1]).map(([n]) => n)
 

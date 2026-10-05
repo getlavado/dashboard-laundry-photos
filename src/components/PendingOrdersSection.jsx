@@ -61,7 +61,7 @@ function groupByLaundry(orders) {
   for (const o of orders) {
     const key = o.laundryId || o.laundryName
     if (!map[key]) map[key] = { id: key, name: o.laundryName, orders: [] }
-    map[key].orders.push({ ...o, delay: delayDays(o.pickUpTime) })
+    map[key].orders.push({ ...o, delay: delayDays(o.dueFrom) })
   }
   return Object.values(map)
     .map(g => {

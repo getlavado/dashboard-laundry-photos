@@ -82,9 +82,19 @@ function toDate(val) {
 
 // referenceDay = "hoy" para efectos de esta orden: el día real (período actual)
 // o el último día del período que se está consultando (períodos pasados).
+// Desde cuándo la planta debe la guía: el recojo, o la creación de la orden si
+// se cargó después del recojo (órdenes registradas tarde no castigan a la
+// planta, que no podía subir la guía de una orden que aún no existía).
+function guiaDueFrom(order) {
+  const pickup  = toDate(order.pickUpTime)
+  const created = toDate(order.createdAt)
+  if (!pickup) return null
+  return created && created > pickup ? created : pickup
+}
+
 function guiaStatus(order, referenceDay) {
-  const pickup        = toDate(order.pickUpTime)
-  const missingPickup = !!pickup && formatDate(pickup) < referenceDay && invoiceCount(order) < 1
+  const dueFrom       = guiaDueFrom(order)
+  const missingPickup = !!dueFrom && formatDate(dueFrom) < referenceDay && invoiceCount(order) < 1
   return { missingPickup, isCompliant: !missingPickup }
 }
 
@@ -349,6 +359,7 @@ async function computeStats(query) {
       pickUpTime:      toDate(o.pickUpTime)?.toISOString()    || null,
       deliveryDate:    toDate(o.deliveryDate)?.toISOString() || null,
       createdAt:       toDate(o.createdAt)?.toISOString()    || null,
+      dueFrom:         guiaDueFrom(o)?.toISOString()         || null,
       status:          o.status || null,
       b2bPartnerName:  b2bPartnerNames[o.b2bPartner?.id] || null,
       b2bPartnerId:    o.b2bPartner?.id || null,
@@ -476,7 +487,7 @@ function shortDate(ymd) {
 // weekly = { from, to, total, withGuia, rate } de la semana pasada (solo lunes).
 function buildSlackSummary(pendingOrders, now, weekly) {
   const today  = limaDay(now)
-  const orders = pendingOrders.map(o => ({ ...o, delay: delayDays(o.pickUpTime, today) }))
+  const orders = pendingOrders.map(o => ({ ...o, delay: delayDays(o.dueFrom, today) }))
 
   const byPlant = {}
   for (const o of orders) {
