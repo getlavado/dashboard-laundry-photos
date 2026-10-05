@@ -51,16 +51,10 @@ const B2B_PARTNERS_COLLECTION = 'b2bPartners'
 const EXCLUDED_LAUNDRY_IDS   = new Set(['qBNRz2giHEVlWZBrWbCy'])
 const EXCLUDED_LAUNDRY_NAMES = new Set(['Lavanderia John Doe', 'Lavandería John Doe'])
 
-// Cada orden puede acumular comprobantes en este array: el primero es la guía
-// de recojo, el segundo (si se sube) la de entrega.
+// Cada orden puede acumular comprobantes en este array. Solo se contabiliza la
+// GUÍA DE RECOJO (el primer comprobante): todo el panel — período, gráfico,
+// cumplimiento y pendientes — se basa en pickUpTime, no en deliveryDate.
 const GUIA_FIELD = 'laundryInvoices'
-
-// Solo se contabiliza la GUÍA DE RECOJO para el cumplimiento, no la de entrega.
-// Las lavanderías suben normalmente una sola guía ya con ambas firmas, por lo
-// que exigir una segunda guía de entrega marcaba casi todo como pendiente y
-// ocultaba la información real. Poner en `true` para volver a exigir ambas
-// (modo "separar recojo / entrega").
-const COUNT_DELIVERY_GUIDE = false
 
 // En minúsculas porque siempre se compara contra status.toLowerCase() — cualquier
 // entrada aquí con una mayúscula (ej. 'pickedUp') nunca haría match y excluiría
@@ -89,15 +83,9 @@ function toDate(val) {
 // referenceDay = "hoy" para efectos de esta orden: el día real (período actual)
 // o el último día del período que se está consultando (períodos pasados).
 function guiaStatus(order, referenceDay) {
-  const count    = invoiceCount(order)
-  const pickup   = toDate(order.pickUpTime)
-  const delivery = toDate(order.deliveryDate)
-
-  const missingPickup   = !!pickup   && formatDate(pickup)   < referenceDay && count < 1
-  const missingDelivery = COUNT_DELIVERY_GUIDE
-    && !!delivery && formatDate(delivery) < referenceDay && count < 2
-
-  return { missingPickup, missingDelivery, isCompliant: !missingPickup && !missingDelivery }
+  const pickup        = toDate(order.pickUpTime)
+  const missingPickup = !!pickup && formatDate(pickup) < referenceDay && invoiceCount(order) < 1
+  return { missingPickup, isCompliant: !missingPickup }
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -197,50 +185,27 @@ app.get('/api/stats', async (req, res) => {
     const queryEnd = isCurrentPeriod ? now : lastOfPeriod
 
     // ── Firestore query ───────────────────────────────────────────────────────
+    // Órdenes cuyo RECOJO cae en el período.
     const snap = await db.collection(ORDERS_COLLECTION)
-      .where('deliveryDate', '>=', admin.firestore.Timestamp.fromDate(firstOfPeriod))
-      .where('deliveryDate', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
+      .where('pickUpTime', '>=', admin.firestore.Timestamp.fromDate(firstOfPeriod))
+      .where('pickUpTime', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
       .get()
 
     // "hoy" para el cálculo de guías faltantes: si es el período en curso, el
     // momento real actual; si es un período pasado, su último día.
     const referenceDay = formatDate(queryEnd)
 
-    const validOrderFilter = o => {
-      const status = (o.status || '').toLowerCase()
-      if (!VALID_ORDER_STATUSES.has(status)) return false
-      return o.isB2B === true || o.isB2B === undefined
-    }
-
     const orders = snap.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(validOrderFilter)
-
-    // Segundo query, por pickUpTime dentro del mismo período: Firestore solo
-    // permite filtros de rango sobre un único campo, así que una orden cuyo
-    // recojo cae en el período pero cuya entrega está programada para un
-    // período posterior no aparece en `snap` (filtrado por deliveryDate) y su
-    // guía de recojo vencida quedaría invisible. `candidateOrders` une ambos
-    // queries (deduplicado por id) solo para armar `pendingOrders` — los
-    // agregados de cumplimiento (byDate/byLaundry) siguen usando `orders`.
-    const pickupSnap = await db.collection(ORDERS_COLLECTION)
-      .where('pickUpTime', '>=', admin.firestore.Timestamp.fromDate(firstOfPeriod))
-      .where('pickUpTime', '<=', admin.firestore.Timestamp.fromDate(queryEnd))
-      .get()
-
-    const candidateOrdersById = new Map(orders.map(o => [o.id, o]))
-    for (const doc of pickupSnap.docs) {
-      if (candidateOrdersById.has(doc.id)) continue
-      const o = { id: doc.id, ...doc.data() }
-      if (validOrderFilter(o)) candidateOrdersById.set(doc.id, o)
-    }
-    const candidateOrders = [...candidateOrdersById.values()]
+      .filter(o => {
+        const status = (o.status || '').toLowerCase()
+        if (!VALID_ORDER_STATUSES.has(status)) return false
+        return o.isB2B === true || o.isB2B === undefined
+      })
 
     // ── Collect unique laundry IDs from orders ────────────────────────────────
-    // Se usa candidateOrders (no solo orders) para que las órdenes que solo
-    // vinieron del query por pickUpTime también resuelvan su shortCode.
     const uniqueLaundryIds = [...new Set(
-      candidateOrders.map(o => o.assignmentData?.laundryId).filter(Boolean)
+      orders.map(o => o.assignmentData?.laundryId).filter(Boolean)
     )]
 
     // ── Fetch each laundry doc by ID and build shortCode lookup ───────────────
@@ -262,7 +227,7 @@ app.get('/api/stats', async (req, res) => {
 
     // ── Collect unique b2bPartner IDs and fetch names ─────────────────────────
     const uniqueB2BIds = [...new Set(
-      candidateOrders.map(o => o.b2bPartner?.id).filter(Boolean)
+      orders.map(o => o.b2bPartner?.id).filter(Boolean)
     )]
 
     const cachedB2BNames = cacheGet('b2bPartners')
@@ -285,7 +250,7 @@ app.get('/api/stats', async (req, res) => {
     const byLaundry = {}
 
     for (const order of orders) {
-      const d = toDate(order.deliveryDate)
+      const d = toDate(order.pickUpTime)
       if (!d) continue
       const dateKey = formatDate(d)
       const lid     = order.assignmentData?.laundryId   || 'sin-asignar'
@@ -370,19 +335,16 @@ app.get('/api/stats', async (req, res) => {
     const overallRate  = orders.length > 0 ? Math.round((allCompliant / orders.length) * 100) : 0
 
     // ── Pending orders ────────────────────────────────────────────────────────
-    // Una orden puede aparecer hasta dos veces: una por guía de recojo faltante
-    // y otra por guía de entrega faltante (son pendientes independientes).
     const pendingOrders = []
-    for (const o of candidateOrders) {
+    for (const o of orders) {
       const lid   = o.assignmentData?.laundryId   || null
       const lname = o.assignmentData?.laundryName || ''
       if (lid   && EXCLUDED_LAUNDRY_IDS.has(lid))     continue
       if (lname && EXCLUDED_LAUNDRY_NAMES.has(lname)) continue
 
-      const { missingPickup, missingDelivery } = guiaStatus(o, referenceDay)
-      if (!missingPickup && !missingDelivery) continue
+      if (!guiaStatus(o, referenceDay).missingPickup) continue
 
-      const base = {
+      pendingOrders.push({
         id:              o.id,
         laundryName:     laundryShortNames[o.assignmentData?.laundryId] || o.assignmentData?.laundryName || 'Sin asignar',
         laundryId:       o.assignmentData?.laundryId   || null,
@@ -392,11 +354,10 @@ app.get('/api/stats', async (req, res) => {
         status:          o.status || null,
         b2bPartnerName:  b2bPartnerNames[o.b2bPartner?.id] || null,
         b2bPartnerId:    o.b2bPartner?.id || null,
-      }
-      if (missingPickup)   pendingOrders.push({ ...base, missingType: 'recojo' })
-      if (missingDelivery) pendingOrders.push({ ...base, missingType: 'entrega' })
+        missingType:     'recojo',
+      })
     }
-    pendingOrders.sort((a, b) => new Date(a.deliveryDate || 0) - new Date(b.deliveryDate || 0))
+    pendingOrders.sort((a, b) => new Date(a.pickUpTime || 0) - new Date(b.pickUpTime || 0))
 
     // ── Insights ──────────────────────────────────────────────────────────────
     const projectedCompliance = Math.min(100, Math.round(overallRate))

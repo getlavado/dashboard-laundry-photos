@@ -32,7 +32,7 @@ function CustomTooltip({ active, payload, label, darkMode }) {
 export default function WeeklyChart({ data, darkMode = false }) {
   if (!data || data.length === 0) {
     return (
-      <div className="h-48 sm:h-56 flex items-center justify-center text-gray-300 dark:text-gray-600 text-sm font-medium">
+      <div className="h-48 sm:h-56 flex items-center justify-center text-gray-300 text-sm font-medium">
         Sin datos en este período
       </div>
     )

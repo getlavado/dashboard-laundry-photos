@@ -1,7 +1,7 @@
-import { Clock, Moon, Sun, Menu, X } from 'lucide-react'
+import { Clock, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 
-export default function Header({ lastUpdated, darkMode, onToggleDark }) {
+export default function Header({ lastUpdated }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const time = lastUpdated
     ? lastUpdated.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })
@@ -39,15 +39,6 @@ export default function Header({ lastUpdated, darkMode, onToggleDark }) {
               Actualizado {time}
             </div>
           )}
-
-          {/* Dark mode toggle */}
-          <button
-            onClick={onToggleDark}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-white/15 text-white/90 hover:bg-white/30 transition-all"
-            aria-label={darkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-          >
-            {darkMode ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
 
           {/* Mobile menu button */}
           <button

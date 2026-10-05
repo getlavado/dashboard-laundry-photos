@@ -73,7 +73,7 @@ function generateInsights(s, mode = 'month') {
       type: 'warning',
       icon: TrendingDown,
       title: 'Tendencia a la baja en los últimos días',
-      desc: 'El cumplimiento de los últimos 3 días cayó respecto al período anterior. Revisar con proveedores.',
+      desc: 'El cumplimiento de los últimos 3 días cayó respecto al período anterior. Revisar con las plantas.',
     })
   }
 
@@ -83,7 +83,7 @@ function generateInsights(s, mode = 'month') {
       id:   'worst',
       type: 'danger',
       icon: AlertTriangle,
-      title: `${p.worstProvider.name} es el proveedor más crítico`,
+      title: `${p.worstProvider.name} es la planta más atrasada`,
       desc: `Solo ${p.worstProvider.compliance}% de cumplimiento — ${p.worstProvider.pending} guía${p.worstProvider.pending !== 1 ? 's' : ''} pendiente${p.worstProvider.pending !== 1 ? 's' : ''}.`,
     })
   }
@@ -122,31 +122,31 @@ function generateInsights(s, mode = 'month') {
 
 const styles = {
   success: {
-    card:  'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800/50',
+    card:  'bg-emerald-50 border-emerald-200',
     bar:   'bg-emerald-500',
-    icon:  'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400',
-    title: 'text-emerald-900 dark:text-emerald-300',
-    desc:  'text-emerald-700 dark:text-emerald-400',
+    icon:  'bg-emerald-100 text-emerald-600',
+    title: 'text-emerald-900',
+    desc:  'text-emerald-700',
   },
   warning: {
-    card:  'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800/50',
+    card:  'bg-amber-50 border-amber-200',
     bar:   'bg-amber-400',
-    icon:  'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400',
-    title: 'text-amber-900 dark:text-amber-300',
-    desc:  'text-amber-700 dark:text-amber-400',
+    icon:  'bg-amber-100 text-amber-600',
+    title: 'text-amber-900',
+    desc:  'text-amber-700',
   },
   danger: {
-    card:  'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800/50',
+    card:  'bg-red-50 border-red-200',
     bar:   'bg-red-500',
-    icon:  'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400',
-    title: 'text-red-900 dark:text-red-300',
-    desc:  'text-red-700 dark:text-red-400',
+    icon:  'bg-red-100 text-red-600',
+    title: 'text-red-900',
+    desc:  'text-red-700',
   },
   info: {
-    card:  'bg-[#0890f1]/5 border-[#0890f1]/20 dark:bg-[#0890f1]/10 dark:border-[#0890f1]/30',
+    card:  'bg-[#0890f1]/5 border-[#0890f1]/20',
     bar:   'bg-[#0890f1]',
-    icon:  'bg-[#0890f1]/10 dark:bg-[#0890f1]/20 text-[#0890f1]',
-    title: 'text-[#0672c4] dark:text-[#17a8e3]',
+    icon:  'bg-[#0890f1]/10 text-[#0890f1]',
+    title: 'text-[#0672c4]',
     desc:  'text-[#0890f1]/80',
   },
 }
@@ -161,36 +161,36 @@ function PeriodProgress({ dayOfMonth, daysInMonth, overallRate, mode = 'month' }
   return (
     <div className="gl-card p-4 sm:p-5">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-black text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+        <span className="text-xs font-black text-gray-500 uppercase tracking-wide">
           Progreso de {periodWord}
         </span>
-        <span className="text-xs font-bold text-gray-400 dark:text-gray-500">
+        <span className="text-xs font-bold text-gray-400">
           Día {dayOfMonth} de {daysInMonth}
         </span>
       </div>
 
       {/* Time bar */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between text-[10px] font-semibold text-gray-400 dark:text-gray-500">
+        <div className="flex items-center justify-between text-[10px] font-semibold text-gray-400">
           <span>Tiempo transcurrido</span>
           <span>{periodPct}%</span>
         </div>
-        <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-          <div className="h-1.5 rounded-full bg-gray-300 dark:bg-gray-600 transition-all duration-700" style={{ width: `${periodPct}%` }} />
+        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+          <div className="h-1.5 rounded-full bg-gray-300 transition-all duration-700" style={{ width: `${periodPct}%` }} />
         </div>
       </div>
 
       {/* Compliance bar */}
       <div className="space-y-2 mt-3">
         <div className="flex items-center justify-between text-[10px] font-semibold">
-          <span className="text-gray-400 dark:text-gray-500">Cumplimiento acumulado</span>
-          <span className={overallRate >= TARGET ? 'text-emerald-600 dark:text-emerald-400' : overallRate >= 60 ? 'text-amber-600 dark:text-amber-400' : 'text-[#f6653c]'}>
+          <span className="text-gray-400">Cumplimiento acumulado</span>
+          <span className={overallRate >= TARGET ? 'text-emerald-600' : overallRate >= 60 ? 'text-amber-600' : 'text-[#f6653c]'}>
             {overallRate}%
           </span>
         </div>
-        <div className="relative h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-visible">
+        <div className="relative h-2.5 rounded-full bg-gray-100 overflow-visible">
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-gray-300 dark:bg-gray-600 z-10"
+            className="absolute top-0 bottom-0 w-0.5 bg-gray-300 z-10"
             style={{ left: `${TARGET}%` }}
             title={`Objetivo: ${TARGET}%`}
           />
@@ -202,9 +202,9 @@ function PeriodProgress({ dayOfMonth, daysInMonth, overallRate, mode = 'month' }
             style={{ width: `${overallRate}%` }}
           />
         </div>
-        <div className="flex items-center justify-between text-[9px] text-gray-300 dark:text-gray-600 font-medium">
+        <div className="flex items-center justify-between text-[9px] text-gray-300 font-medium">
           <span>0%</span>
-          <span className="text-gray-400 dark:text-gray-500">▲ objetivo {TARGET}%</span>
+          <span className="text-gray-400">▲ objetivo {TARGET}%</span>
           <span>100%</span>
         </div>
       </div>

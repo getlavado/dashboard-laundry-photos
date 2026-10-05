@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { delayDays, delayLevel } from '../delay'
 import { ExternalLink, ChevronDown, ChevronUp, AlertCircle, Package, Copy, Check } from 'lucide-react'
 
 const ADMIN_BASE = 'https://admin.getlavado.com/admin/services'
@@ -16,43 +17,63 @@ function formatShortDate(iso) {
   return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function missingLabel(type) {
-  return type === 'recojo' ? 'guía de recojo' : 'guía de entrega'
+function delayLabel(days) {
+  return `${days} día${days !== 1 ? 's' : ''} de retraso`
+}
+
+const LEVEL_STYLES = {
+  grave: {
+    border: 'border-red-200',
+    bar:    'bg-red-500',
+    bg:     'bg-red-50',
+    text:   'text-red-700',
+    badge:  'bg-red-100 text-red-700 border-red-200',
+  },
+  medio: {
+    border: 'border-orange-200',
+    bar:    'bg-orange-400',
+    bg:     'bg-orange-50',
+    text:   'text-orange-700',
+    badge:  'bg-orange-100 text-orange-700 border-orange-200',
+  },
+  leve: {
+    border: 'border-amber-200',
+    bar:    'bg-amber-300',
+    bg:     'bg-amber-50/60',
+    text:   'text-amber-800',
+    badge:  'bg-amber-100 text-amber-700 border-amber-200',
+  },
 }
 
 function buildCopyText(group) {
-  const byType = [...group.orders].sort((a, b) => {
-    if (a.missingType === b.missingType) return 0
-    return a.missingType === 'recojo' ? -1 : 1
-  })
   const lines = [
-    `TOTAL DE GUIAS PENDIENTES: ${group.orders.length}`,
+    `TOTAL DE GUIAS DE RECOJO PENDIENTES: ${group.orders.length}`,
     '',
     'ATT',
-    ...byType.map(o => `* ${o.b2bPartnerName || o.id} ${formatShortDate(o.deliveryDate)} — falta ${missingLabel(o.missingType)}`),
+    ...group.orders.map(o => `* ${o.b2bPartnerName || o.id} ${formatShortDate(o.pickUpTime)} — ${delayLabel(o.delay)}`),
   ]
   return lines.join('\n')
 }
 
+// Agrupa por planta y ordena: primero la que tiene la guía más atrasada.
 function groupByLaundry(orders) {
   const map = {}
   for (const o of orders) {
     const key = o.laundryId || o.laundryName
     if (!map[key]) map[key] = { id: key, name: o.laundryName, orders: [] }
-    map[key].orders.push(o)
+    map[key].orders.push({ ...o, delay: delayDays(o.pickUpTime) })
   }
   return Object.values(map)
-    .map(g => ({
-      ...g,
-      pickupCount:   g.orders.filter(o => o.missingType === 'recojo').length,
-      deliveryCount: g.orders.filter(o => o.missingType === 'entrega').length,
-    }))
-    .sort((a, b) => b.orders.length - a.orders.length)
+    .map(g => {
+      const sorted = [...g.orders].sort((a, b) => b.delay - a.delay)
+      return { ...g, orders: sorted, maxDelay: sorted[0]?.delay ?? 0 }
+    })
+    .sort((a, b) => b.maxDelay - a.maxDelay || b.orders.length - a.orders.length)
 }
 
 /* ─── Per-laundry collapsible group ─────────────────────────────────────── */
 
-function LaundryGroup({ group, total }) {
+function LaundryGroup({ group }) {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const count = group.orders.length
@@ -64,61 +85,39 @@ function LaundryGroup({ group, total }) {
       setTimeout(() => setCopied(false), 2000)
     })
   }
-  const pct   = total > 0 ? Math.round((count / total) * 100) : 0
 
-  const accent =
-    count >= 5 ? {
-      border: 'border-red-200 dark:border-red-800/50',
-      bar:    'bg-red-500',
-      bg:     'bg-red-50 dark:bg-red-900/20',
-      text:   'text-red-700 dark:text-red-400',
-      badge:  'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800/40',
-    } :
-    count >= 2 ? {
-      border: 'border-amber-200 dark:border-amber-800/50',
-      bar:    'bg-amber-400',
-      bg:     'bg-amber-50 dark:bg-amber-900/20',
-      text:   'text-amber-700 dark:text-amber-400',
-      badge:  'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800/40',
-    } : {
-      border: 'border-gray-100 dark:border-gray-800',
-      bar:    'bg-gray-300 dark:bg-gray-600',
-      bg:     'bg-gray-50 dark:bg-gray-800/50',
-      text:   'text-gray-600 dark:text-gray-300',
-      badge:  'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700',
-    }
+  const accent = LEVEL_STYLES[delayLevel(group.maxDelay)]
 
   return (
     <div className={`rounded-xl border overflow-hidden ${accent.border}`}>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen(v => !v)}
-        className={`w-full flex items-center gap-3 px-4 sm:px-5 py-3.5 sm:py-4 ${accent.bg} hover:brightness-95 transition-all text-left`}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v) } }}
+        className={`w-full flex items-center gap-3 px-4 sm:px-5 py-3.5 sm:py-4 ${accent.bg} hover:brightness-95 transition-all text-left cursor-pointer`}
       >
         <div className={`w-1.5 self-stretch rounded-full shrink-0 ${accent.bar}`} />
 
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-black truncate ${accent.text}`}>{group.name}</p>
+          <p className="text-[11px] text-gray-500 font-semibold mt-0.5">
+            {count} guía{count !== 1 ? 's' : ''} sin subir
+          </p>
         </div>
 
-        <div className={`shrink-0 flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full border ${accent.badge}`}>
-          {group.pickupCount > 0 && group.deliveryCount > 0 ? (
-            <span title="Guías de recojo y de entrega que debe esta lavandería">
-              {group.pickupCount} recojo · {group.deliveryCount} entrega
-            </span>
-          ) : (
-            <span>{count} sin guía {group.pickupCount > 0 ? 'de recojo' : 'de entrega'}</span>
-          )}
-          <span className="opacity-50 hidden sm:inline">·</span>
-          <span title="Porcentaje del total de órdenes pendientes" className="hidden sm:inline">{pct}% del pendiente</span>
+        <div className={`shrink-0 text-xs font-black px-3 py-1 rounded-full border ${accent.badge}`}
+          title="Retraso de su guía más antigua">
+          {group.maxDelay >= 3 && '⚠ '}{group.maxDelay} día{group.maxDelay !== 1 ? 's' : ''}
         </div>
 
         <button
           onClick={handleCopy}
-          title="Copiar resumen"
+          title="Copiar resumen para enviar a la planta"
           className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
             copied
-              ? 'bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400'
-              : 'bg-white/60 dark:bg-gray-700/60 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+              ? 'bg-green-100 text-green-600'
+              : 'bg-white/60 text-gray-400 hover:text-gray-600'
           }`}
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -126,46 +125,41 @@ function LaundryGroup({ group, total }) {
 
         <ChevronDown
           size={16}
-          className={`shrink-0 text-gray-400 dark:text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
         />
-      </button>
+      </div>
 
       {open && (
-        <div className="divide-y divide-gray-50 dark:divide-gray-800 bg-white dark:bg-gray-900">
-          {group.orders.map(o => (
-            <div key={`${o.id}-${o.missingType}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors">
-              <Package size={11} className="text-gray-300 dark:text-gray-600 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] font-mono text-gray-400 dark:text-gray-500 truncate">{o.id}</p>
-                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 flex flex-wrap items-center gap-x-1.5">
-                  {o.pickUpTime && <span>Recojo: {formatDate(o.pickUpTime)}</span>}
-                  {o.pickUpTime && <span className="opacity-40">·</span>}
-                  <span>Entrega: {formatDate(o.deliveryDate)}</span>
-                  {o.b2bPartnerName && <span className="opacity-40">·</span>}
-                  {o.b2bPartnerName && (
-                    <span className="text-[#0890f1] dark:text-blue-400 font-medium">{o.b2bPartnerName}</span>
-                  )}
-                </p>
+        <div className="divide-y divide-gray-50 bg-white">
+          {group.orders.map(o => {
+            const st = LEVEL_STYLES[delayLevel(o.delay)]
+            return (
+              <div key={o.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/60 transition-colors">
+                <Package size={11} className="text-gray-300 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] text-gray-600 font-semibold flex flex-wrap items-center gap-x-1.5">
+                    <span>Recojo: {formatDate(o.pickUpTime)}</span>
+                    {o.b2bPartnerName && <span className="opacity-40">·</span>}
+                    {o.b2bPartnerName && (
+                      <span className="text-[#0890f1] font-medium">{o.b2bPartnerName}</span>
+                    )}
+                  </p>
+                  <p className="text-[10px] font-mono text-gray-400 truncate mt-0.5">{o.id}</p>
+                </div>
+                <span className={`shrink-0 text-[10px] font-bold px-2 py-1 rounded-full border ${st.badge}`}>
+                  {delayLabel(o.delay)}
+                </span>
+                <a
+                  href={`${ADMIN_BASE}/${o.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-[#0890f1] hover:text-[#0675c8] bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                >
+                  Ver <ExternalLink size={9} />
+                </a>
               </div>
-              <span
-                className={`shrink-0 text-[9px] font-bold px-2 py-1 rounded-full border ${
-                  o.missingType === 'recojo'
-                    ? 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800/50'
-                    : 'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/50'
-                }`}
-              >
-                Falta {missingLabel(o.missingType)}
-              </span>
-              <a
-                href={`${ADMIN_BASE}/${o.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-[#0890f1] hover:text-[#0675c8] bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 px-2.5 py-1.5 rounded-lg transition-colors"
-              >
-                Ver <ExternalLink size={9} />
-              </a>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -180,37 +174,21 @@ export default function PendingOrdersSection({ orders = [], loading }) {
   if (loading || orders.length === 0) return null
 
   const groups = groupByLaundry(orders)
-  const pickupTotal   = orders.filter(o => o.missingType === 'recojo').length
-  const deliveryTotal = orders.filter(o => o.missingType === 'entrega').length
 
   return (
-    <div className="gl-card overflow-hidden border-2 border-[#f6653c]/20 dark:border-[#f6653c]/30">
+    <div className="gl-card overflow-hidden border-2 border-[#f6653c]/20">
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full px-5 sm:px-7 pt-6 pb-5 flex items-center justify-between gap-3 hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors"
+        className="w-full px-5 sm:px-7 pt-6 pb-5 flex items-center justify-between gap-3 hover:bg-gray-50/50 transition-colors"
       >
         <div className="flex items-center gap-3.5 text-left">
           <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#f6653c]/10 flex items-center justify-center shrink-0">
             <AlertCircle size={22} className="text-[#d94e27]" />
           </div>
           <div>
-            <h2 className="text-base sm:text-lg font-black text-gray-800 dark:text-gray-100">Guías pendientes</h2>
-            <p className="text-xs sm:text-sm text-gray-400 dark:text-gray-500 font-semibold mt-0.5 flex flex-wrap items-center gap-x-1.5">
-              <span>{orders.length} pendiente{orders.length !== 1 ? 's' : ''}</span>
-              {pickupTotal > 0 && (
-                <>
-                  <span className="opacity-40">·</span>
-                  <span>{pickupTotal} recojo</span>
-                </>
-              )}
-              {deliveryTotal > 0 && (
-                <>
-                  <span className="opacity-40">·</span>
-                  <span>{deliveryTotal} entrega</span>
-                </>
-              )}
-              <span className="opacity-40">·</span>
-              <span>{groups.length} lavandería{groups.length !== 1 ? 's' : ''}</span>
+            <h2 className="text-base sm:text-lg font-black text-gray-800">¿Quién está atrasado?</h2>
+            <p className="text-xs sm:text-sm text-gray-500 font-semibold mt-0.5">
+              Primero la planta más atrasada · toca una para ver sus guías
             </p>
           </div>
         </div>
@@ -219,15 +197,15 @@ export default function PendingOrdersSection({ orders = [], loading }) {
             {orders.length}
           </span>
           {open
-            ? <ChevronUp size={18} className="text-gray-400 dark:text-gray-500" />
-            : <ChevronDown size={18} className="text-gray-400 dark:text-gray-500" />
+            ? <ChevronUp size={18} className="text-gray-400" />
+            : <ChevronDown size={18} className="text-gray-400" />
           }
         </div>
       </button>
 
       {open && (
-        <div className="border-t border-gray-50 dark:border-gray-800 px-5 sm:px-7 py-5 space-y-3">
-          {groups.map(g => <LaundryGroup key={g.id} group={g} total={orders.length} />)}
+        <div className="border-t border-gray-50 px-5 sm:px-7 py-5 space-y-3">
+          {groups.map(g => <LaundryGroup key={g.id} group={g} />)}
         </div>
       )}
     </div>
