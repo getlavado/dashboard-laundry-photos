@@ -441,11 +441,12 @@ app.get('/api/stats', async (req, res) => {
 
 // ─── Resumen diario a Slack ──────────────────────────────────────────────────
 // Vercel Cron llama a este endpoint lun–sáb 9:00 am Lima (ver vercel.json).
-//   · Lunes: se envía siempre (aunque todo esté al día).
-//   · Mar–sáb: solo si hay atraso (🟡 o 🔴).
+//   · Lunes: resumen semanal, se envía siempre (aunque todo esté al día).
+//   · Mar–sáb: alerta diaria, solo si hay atraso (🟡 o 🔴).
 // Env: SLACK_WEBHOOK_URL (obligatorio), SLACK_MENTION (ej. "<@U0123ABC>",
 // se etiqueta cuando hay atraso), CRON_SECRET (lo envía Vercel Cron).
-// ?dry=1 devuelve el mensaje sin enviarlo · ?force=1 envía aunque no toque.
+// ?dry=1 devuelve el mensaje sin enviarlo · ?force=1 envía aunque no toque ·
+// ?weekly=1|0 fuerza el formato semanal o el diario.
 const DASHBOARD_URL = 'https://guias-b2b-nine.vercel.app'
 const TZ = 'America/Lima'
 
@@ -460,7 +461,20 @@ function delayDays(iso, todayLima) {
   return Math.round((new Date(todayLima) - new Date(limaDay(new Date(iso)))) / 86400000)
 }
 
-function buildSlackSummary(pendingOrders, now) {
+function addDays(ymd, n) {
+  const d = new Date(ymd + 'T12:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+function shortDate(ymd) {
+  return new Date(ymd + 'T12:00:00Z').toLocaleDateString('es-PE', {
+    timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short',
+  })
+}
+
+// weekly = { from, to, total, withGuia, rate } de la semana pasada (solo lunes).
+function buildSlackSummary(pendingOrders, now, weekly) {
   const today  = limaDay(now)
   const orders = pendingOrders.map(o => ({ ...o, delay: delayDays(o.pickUpTime, today) }))
 
@@ -477,21 +491,35 @@ function buildSlackSummary(pendingOrders, now) {
   // Misma regla que el semáforo del dashboard (StatusHero).
   const maxDelay = Math.max(0, ...orders.map(o => o.delay))
   const level    = maxDelay >= 3 ? 'mal' : maxDelay === 2 ? 'medio' : 'bien'
-  const header   = { mal: '🔴 *Guías B2B: vamos mal*', medio: '🟡 *Guías B2B: más o menos*', bien: '🟢 *Guías B2B: vamos bien*' }[level]
+  const status   = { mal: '🔴 *Vamos mal*', medio: '🟡 *Más o menos*', bien: '🟢 *Vamos bien*' }[level]
+  const pending  = orders.length === 0
+    ? 'todas las plantas subieron sus guías de recojo'
+    : `${orders.length} guía${orders.length !== 1 ? 's' : ''} de recojo sin subir · ${plants.length} planta${plants.length !== 1 ? 's' : ''}`
 
-  const lines = [header]
-  if (orders.length === 0) {
-    lines.push('Todas las plantas subieron sus guías de recojo.')
+  const lines = []
+  if (weekly) {
+    lines.push(`📊 *Resumen semanal · Guías B2B* (${shortDate(weekly.from)} – ${shortDate(weekly.to)})`)
+    lines.push(`Semana pasada: ${weekly.total} recojos · ${weekly.withGuia} con guía (${weekly.rate}%)`)
+    lines.push('')
+    lines.push(`*Hoy:* ${status} — ${pending}`)
   } else {
-    lines.push(`${orders.length} guía${orders.length !== 1 ? 's' : ''} de recojo sin subir · ${plants.length} planta${plants.length !== 1 ? 's' : ''}`)
-    const top = plants.slice(0, 8)
-    for (const p of top) {
-      lines.push(`• *${p.name}*: ${p.count} guía${p.count !== 1 ? 's' : ''} · ${p.maxDelay} día${p.maxDelay !== 1 ? 's' : ''}${p.maxDelay >= 3 ? ' ⚠️' : ''}`)
-    }
-    if (plants.length > top.length) lines.push(`…y ${plants.length - top.length} más`)
+    lines.push(`⏰ *Alerta diaria · Guías atrasadas* (${shortDate(today)})`)
+    lines.push(`${status} — ${pending}`)
   }
-  if (level !== 'bien' && process.env.SLACK_MENTION) {
-    lines.push(`${process.env.SLACK_MENTION} ¿nos ayudas a mover a estas plantas? 🙏`)
+
+  const top = plants.slice(0, 8)
+  for (const p of top) {
+    lines.push(`• *${p.name}*: ${p.count} guía${p.count !== 1 ? 's' : ''} · ${p.maxDelay} día${p.maxDelay !== 1 ? 's' : ''}${p.maxDelay >= 3 ? ' ⚠️' : ''}`)
+  }
+  if (plants.length > top.length) lines.push(`…y ${plants.length - top.length} más`)
+
+  // Tarea concreta para quien mueve a las plantas: las de 3+ días (o 2 días si
+  // no hay ninguna peor).
+  const mention = process.env.SLACK_MENTION
+  if (level !== 'bien' && mention) {
+    const target = plants.filter(p => p.maxDelay >= (level === 'mal' ? 3 : 2)).map(p => p.name)
+    lines.push('')
+    lines.push(`✅ *Tarea de hoy* ${mention}: escribir a *${target.join(', ')}* para que suban sus guías antes de las 6 pm. Responde en este hilo cuando estén subidas.`)
   }
   lines.push(`👉 ${DASHBOARD_URL}`)
 
@@ -513,8 +541,20 @@ app.get('/api/slack-summary', async (req, res) => {
     const from = new Date(now.getTime() - 29 * 86400000)
     const stats = await computeStats({ from: limaDay(from), to: limaDay(now) })
 
-    const { level, text } = buildSlackSummary(stats.pendingOrders, now)
     const weekday = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(now)
+
+    // Lunes: resumen semanal con la semana pasada (lun–dom).
+    let weekly = null
+    if (req.query.weekly !== '0' && (weekday === 'Mon' || req.query.weekly === '1')) {
+      const today   = limaDay(now)
+      const offset  = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday]
+      const wFrom   = addDays(today, -offset - 7)
+      const wTo     = addDays(wFrom, 6)
+      const p       = (await computeStats({ from: wFrom, to: wTo })).summary.period
+      weekly = { from: wFrom, to: wTo, total: p.totalOrders, withGuia: p.totalWithGuia, rate: p.overallRate }
+    }
+
+    const { level, text } = buildSlackSummary(stats.pendingOrders, now, weekly)
     const shouldSend = req.query.force === '1' || weekday === 'Mon' || level !== 'bien'
 
     if (dry || !shouldSend) return res.json({ sent: false, weekday, level, text })
